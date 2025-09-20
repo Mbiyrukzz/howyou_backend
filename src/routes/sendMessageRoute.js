@@ -7,12 +7,12 @@ const sendMessageRoute = {
   middleware: [verifyAuthToken],
   handler: async (req, res) => {
     try {
-      const { chatId, senderId, content } = req.body
+      const { chatId, content } = req.body
       const { messages } = getCollections()
 
       const result = await messages.insertOne({
         chatId,
-        senderId,
+        senderId: req.user.uid, // ✅ from Firebase
         content,
         type: 'text',
         createdAt: new Date(),
