@@ -2,14 +2,19 @@ const { listChatsRoute } = require('./listChatsRoute')
 const { sendMessageRoute } = require('./sendMessageRoute')
 const { createUserRoute } = require('./createUserRoute')
 const { createChatRoute } = require('./createChatRoute')
-const { listContactsRoute } = require('./listContactsRoute')
+const { createRoomRoute } = require('./createRoomRoute')
+const { listUsersRoute } = require('./listUsersRoute')
+const { listMessagesRoute } = require('./listMessagesRoute')
 
 const routes = [
   createUserRoute,
   createChatRoute,
   sendMessageRoute,
   listChatsRoute,
-  listContactsRoute,
+  listMessagesRoute,
+
+  listUsersRoute,
+  createRoomRoute,
 ]
 
 module.exports = { routes }

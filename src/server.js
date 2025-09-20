@@ -18,8 +18,21 @@ const startServer = async () => {
   try {
     await initializeDbConnection() // ✅ wait for DB ready
 
+    // FIXED: Properly register routes with middleware
     routes.forEach((route) => {
-      app[route.method](route.path, route.handler)
+      if (route.middleware && route.middleware.length > 0) {
+        // Apply middleware if exists
+        app[route.method](route.path, ...route.middleware, route.handler)
+        console.log(
+          `✅ Registered ${route.method.toUpperCase()} ${
+            route.path
+          } with middleware`
+        )
+      } else {
+        // No middleware
+        app[route.method](route.path, route.handler)
+        console.log(`✅ Registered ${route.method.toUpperCase()} ${route.path}`)
+      }
     })
 
     app.get('/test', (req, res) => {
@@ -28,6 +41,10 @@ const startServer = async () => {
 
     app.listen(5000, '0.0.0.0', () => {
       console.log('Server running at http://0.0.0.0:5000')
+      console.log('Routes registered:')
+      routes.forEach((route) => {
+        console.log(`  ${route.method.toUpperCase()} ${route.path}`)
+      })
     })
   } catch (err) {
     console.error('❌ Failed to start server:', err)

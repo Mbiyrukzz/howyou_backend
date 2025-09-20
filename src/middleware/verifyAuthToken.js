@@ -2,31 +2,35 @@ const admin = require('firebase-admin')
 
 const verifyAuthToken = async (req, res, next) => {
   try {
-    const authHeader = req.headers.authorization || ''
-    const authtoken = authHeader.startsWith('Bearer ')
-      ? authHeader.split(' ')[1]
-      : null
+    // Check for Authorization header first (standard Bearer format)
+    const authHeader = req.headers.authorization
+    let token = null
 
-    console.log('🔍 Verifying token for:', { method: req.method, url: req.url })
-    console.log(
-      '🔍 Token:',
-      authtoken ? authtoken.substring(0, 10) + '...' : 'Missing'
-    )
-
-    if (!authtoken) {
-      return res.status(401).json({ error: 'No authentication token provided' })
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.split('Bearer ')[1]
+    } else if (req.headers.authtoken) {
+      // Fallback to custom authtoken header
+      token = req.headers.authtoken
     }
 
-    const authUser = await admin.auth().verifyIdToken(authtoken)
-    console.log('✅ Auth user:', { uid: authUser.uid, email: authUser.email })
-    req.user = authUser
+    console.log(
+      '🔐 Received token:',
+      token ? token.substring(0, 20) + '...' : 'none'
+    )
+
+    if (!token) {
+      console.log('❌ No auth token provided')
+      return res.status(401).json({ error: 'No auth token provided' })
+    }
+
+    const decodedToken = await admin.auth().verifyIdToken(token)
+    console.log('✅ Token verified for user:', decodedToken.uid)
+
+    req.user = decodedToken
     next()
   } catch (error) {
-    console.error('❌ Auth Token Verification Failed:', error.message, {
-      method: req.method,
-      url: req.url,
-    })
-    return res.status(401).json({ error: 'Invalid or expired token' })
+    console.error('❌ Error verifying token:', error.message)
+    res.status(401).json({ error: 'Unauthorized' })
   }
 }
 

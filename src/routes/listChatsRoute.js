@@ -1,24 +1,38 @@
-// routes/listChatsRoute.js
-const { ObjectId } = require('mongodb')
+// listChatsRoute.js
+const { getCollections } = require('../db')
+const { verifyAuthToken } = require('../middleware/verifyAuthToken')
 
 const listChatsRoute = {
+  path: '/list-chats',
   method: 'get',
-  path: '/chats',
+  middleware: [verifyAuthToken],
   handler: async (req, res) => {
     try {
-      const db = req.app.locals.db // db attached in server.js
-      const chatsCollection = db.collection('chats')
+      const currentUserId = req.user.uid
+      console.log('🔄 Loading chats for user:', currentUserId)
 
-      // Example: fetch all chats
-      const chats = await chatsCollection
-        .find({})
-        .sort({ updatedAt: -1 }) // latest first
+      if (!currentUserId) {
+        return res
+          .status(401)
+          .json({ success: false, error: 'User not authenticated' })
+      }
+
+      const { chats } = getCollections()
+
+      // Find all chats where the current user is a participant
+      const userChats = await chats
+        .find({
+          participants: currentUserId,
+        })
+        .sort({ lastActivity: -1 }) // Latest activity first
         .toArray()
 
-      res.status(200).json(chats)
+      console.log('✅ Found chats:', userChats.length)
+
+      res.json(userChats)
     } catch (error) {
-      console.error('Error fetching chats:', error)
-      res.status(500).json({ error: 'Failed to fetch chats' })
+      console.error('❌ Error fetching chats:', error)
+      res.status(500).json({ success: false, error: 'Failed to fetch chats' })
     }
   },
 }
