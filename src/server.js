@@ -22,7 +22,13 @@ const startServer = async () => {
       app[route.method](route.path, route.handler)
     })
 
-    app.listen(5000, () => console.log('✅ Server running on port 5000'))
+    app.get('/test', (req, res) => {
+      res.send({ message: 'Backend is reachable 🚀' })
+    })
+
+    app.listen(5000, '0.0.0.0', () => {
+      console.log('Server running at http://0.0.0.0:5000')
+    })
   } catch (err) {
     console.error('❌ Failed to start server:', err)
     process.exit(1)
