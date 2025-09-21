@@ -1,4 +1,4 @@
-// sendMessageRoute.js
+// sendMessageRoute.js - FIXED VERSION
 const { getCollections } = require('../db')
 const { verifyAuthToken } = require('../middleware/verifyAuthToken')
 const { ObjectId } = require('mongodb')
@@ -16,12 +16,12 @@ const sendMessageRoute = {
           .json({ success: false, error: 'chatId and content required' })
       }
 
-      const { messages, chats } = getCollections()
+      const { messages, chats, users } = getCollections()
 
       // Verify user has access to this chat
       const chat = await chats.findOne({
         _id: new ObjectId(chatId),
-        participants: req.user.uid,
+        participants: req.user.uid, // This checks Firebase UID
       })
 
       if (!chat) {
@@ -30,9 +30,10 @@ const sendMessageRoute = {
           .json({ success: false, error: 'Access denied to this chat' })
       }
 
+      // ✅ IMPORTANT: Use Firebase UID consistently for senderId
       const newMessage = {
         chatId: new ObjectId(chatId),
-        senderId: req.user.uid, // Firebase UID
+        senderId: req.user.uid, // ✅ Always use Firebase UID
         content: content.trim(),
         type: 'text',
         createdAt: new Date(),

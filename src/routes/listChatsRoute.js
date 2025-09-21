@@ -19,16 +19,15 @@ const listChatsRoute = {
 
       const { chats } = getCollections()
 
-      // Find all chats where the current user is a participant
+      // ✅ Only look for Firebase UID in participants
       const userChats = await chats
         .find({
-          participants: currentUserId,
+          participants: currentUserId, // Simple check for Firebase UID
         })
-        .sort({ lastActivity: -1 }) // Latest activity first
+        .sort({ lastActivity: -1 })
         .toArray()
 
       console.log('✅ Found chats:', userChats.length)
-
       res.json(userChats)
     } catch (error) {
       console.error('❌ Error fetching chats:', error)
