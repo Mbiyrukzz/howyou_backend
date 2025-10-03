@@ -6,7 +6,7 @@ const credentials = require('../credentials.json')
 const { routes } = require('./routes')
 const { initializeDbConnection } = require('./db')
 const { setupSignalingServer } = require('./signalingServer')
-const { setWebSocketClients } = require('./routes/callRoutes')
+const { setWebSocketClients } = require('./routes/initiateCallRoute')
 
 // Initialize Firebase Admin
 admin.initializeApp({
