@@ -1,27 +1,43 @@
 const express = require('express')
 const cors = require('cors')
+const http = require('http')
 const admin = require('firebase-admin')
 const credentials = require('../credentials.json')
 const { routes } = require('./routes')
 const { initializeDbConnection } = require('./db')
+const { setupSignalingServer } = require('./signalingServer')
+const { setWebSocketClients } = require('./routes/callRoutes')
 
+// Initialize Firebase Admin
 admin.initializeApp({
   credential: admin.credential.cert(credentials),
 })
 
+// Create Express app
 const app = express()
 app.use(cors())
 app.use(express.json())
 
-// Attach routes only after DB connects
+// Create HTTP server
+const server = http.createServer(app)
+
+// Setup signaling server and get client reference
+const wsClients = setupSignalingServer(server)
+
+// Pass WebSocket clients to call routes
+if (wsClients) {
+  setWebSocketClients(wsClients)
+}
+
+// Start server
 const startServer = async () => {
   try {
-    await initializeDbConnection() // ✅ wait for DB ready
+    await initializeDbConnection()
+    console.log('✅ Database connected')
 
-    // FIXED: Properly register routes with middleware
+    // Register all routes
     routes.forEach((route) => {
       if (route.middleware && route.middleware.length > 0) {
-        // Apply middleware if exists
         app[route.method](route.path, ...route.middleware, route.handler)
         console.log(
           `✅ Registered ${route.method.toUpperCase()} ${
@@ -29,21 +45,32 @@ const startServer = async () => {
           } with middleware`
         )
       } else {
-        // No middleware
         app[route.method](route.path, route.handler)
         console.log(`✅ Registered ${route.method.toUpperCase()} ${route.path}`)
       }
     })
 
+    // Test endpoint
     app.get('/test', (req, res) => {
       res.send({ message: 'Backend is reachable 🚀' })
     })
 
-    app.listen(5000, '0.0.0.0', () => {
-      console.log('Server running at http://0.0.0.0:5000')
-      console.log('Routes registered:')
+    // Health check
+    app.get('/health', (req, res) => {
+      res.json({
+        status: 'healthy',
+        timestamp: new Date().toISOString(),
+        websocket: wsClients ? 'connected' : 'disconnected',
+      })
+    })
+
+    // Start server
+    server.listen(5000, '0.0.0.0', () => {
+      console.log('🚀 Server running on http://0.0.0.0:5000')
+      console.log('📡 WebSocket signaling ready')
+      console.log('\n📋 Registered routes:')
       routes.forEach((route) => {
-        console.log(`  ${route.method.toUpperCase()} ${route.path}`)
+        console.log(`  ${route.method.toUpperCase().padEnd(6)} ${route.path}`)
       })
     })
   } catch (err) {
@@ -53,3 +80,12 @@ const startServer = async () => {
 }
 
 startServer()
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('⚠️ SIGTERM received, shutting down gracefully')
+  server.close(() => {
+    console.log('✅ Server closed')
+    process.exit(0)
+  })
+})

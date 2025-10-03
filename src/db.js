@@ -29,6 +29,8 @@ const getCollections = () => {
     messages: database.collection('messages'),
     rooms: database.collection('rooms'),
     participants: database.collection('participants'),
+    calls: database.collection('calls'),
+    voice: database.collection('voice'),
   }
 }
 
