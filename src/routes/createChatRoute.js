@@ -1,4 +1,3 @@
-// createChatRoute.js - FIXED VERSION
 const { getCollections } = require('../db')
 const { verifyAuthToken } = require('../middleware/verifyAuthToken')
 const { ObjectId } = require('mongodb')
@@ -11,10 +10,8 @@ const createChatRoute = {
     try {
       const { participants = [], name } = req.body
       const currentUserId = req.user.uid
-      console.log('🔄 Creating chat:', { participants, name, currentUserId })
 
       if (!currentUserId) {
-        console.log('❌ No user ID in request')
         return res
           .status(401)
           .json({ success: false, error: 'User not authenticated' })
@@ -22,47 +19,39 @@ const createChatRoute = {
 
       const { chats, users } = getCollections()
 
-      // ✅ IMPORTANT: Convert ALL participant IDs to Firebase UIDs
-      const convertedParticipants = []
+      // ✅ Normalize all participants to Firebase UIDs
+      const convertedParticipants = new Set([currentUserId])
 
-      // Add current user (already Firebase UID)
-      convertedParticipants.push(currentUserId)
-
-      // Convert other participants to Firebase UIDs
       for (const participantId of participants) {
         const query = [{ firebaseUid: participantId }]
-
-        try {
-          if (ObjectId.isValid(participantId)) {
-            query.push({ _id: new ObjectId(participantId) })
-          }
-        } catch (e) {
-          console.warn('Invalid ObjectId skipped:', participantId)
-        }
+        if (ObjectId.isValid(participantId))
+          query.push({ _id: new ObjectId(participantId) })
 
         const participantUser = await users.findOne({ $or: query })
-
-        if (
-          participantUser?.firebaseUid &&
-          !convertedParticipants.includes(participantUser.firebaseUid)
-        ) {
-          convertedParticipants.push(participantUser.firebaseUid)
-        }
+        if (participantUser?.firebaseUid)
+          convertedParticipants.add(participantUser.firebaseUid)
       }
 
-      console.log(
-        '👥 Final participants (Firebase UIDs):',
-        convertedParticipants
-      )
+      const finalParticipants = [...convertedParticipants]
+      console.log('👥 Final participants:', finalParticipants)
 
-      // For direct chats (2 participants), check if chat already exists
-      if (convertedParticipants.length === 2 && !name) {
-        const existingChat = await chats.findOne({
-          participants: { $all: convertedParticipants, $size: 2 },
+      // ✅ Handle 1-on-1 chat duplicate prevention
+      if (finalParticipants.length === 2 && !name) {
+        // Fetch all 1-on-1 chats of the current user
+        const userChats = await chats
+          .find({ participants: currentUserId, isGroup: false })
+          .toArray()
+
+        // Compare arrays manually
+        const existingChat = userChats.find((chat) => {
+          if (chat.participants.length !== 2) return false
+          const normalized = chat.participants.map(String).sort()
+          const compareTo = [...finalParticipants].map(String).sort()
+          return JSON.stringify(normalized) === JSON.stringify(compareTo)
         })
 
         if (existingChat) {
-          console.log('💬 Chat already exists:', existingChat._id)
+          console.log('💬 Existing chat found:', existingChat._id)
           return res.json({
             success: true,
             chat: existingChat,
@@ -71,21 +60,21 @@ const createChatRoute = {
         }
       }
 
-      // Create new chat with Firebase UIDs only
+      // ✅ Create new chat
       const newChat = {
-        participants: convertedParticipants, // ✅ All Firebase UIDs
+        participants: finalParticipants,
         name: name || null,
         createdBy: currentUserId,
         createdAt: new Date(),
         lastActivity: new Date(),
         lastMessage: null,
-        isGroup: convertedParticipants.length > 2 || Boolean(name),
+        isGroup: finalParticipants.length > 2 || Boolean(name),
       }
 
       const result = await chats.insertOne(newChat)
       const createdChat = { ...newChat, _id: result.insertedId }
 
-      console.log('✅ Chat created with participants:', convertedParticipants)
+      console.log('✅ Chat created:', createdChat._id)
 
       res.json({
         success: true,
