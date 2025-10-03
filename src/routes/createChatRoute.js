@@ -10,8 +10,7 @@ const createChatRoute = {
   handler: async (req, res) => {
     try {
       const { participants = [], name } = req.body
-      const currentUserId = req.user.uid // Firebase UID from middleware
-
+      const currentUserId = req.user.uid
       console.log('🔄 Creating chat:', { participants, name, currentUserId })
 
       if (!currentUserId) {
@@ -31,19 +30,23 @@ const createChatRoute = {
 
       // Convert other participants to Firebase UIDs
       for (const participantId of participants) {
-        // Check if it's already a Firebase UID or if it's a MongoDB ObjectId
-        const participantUser = await users.findOne({
-          $or: [
-            { firebaseUid: participantId }, // Already Firebase UID
-            { _id: new ObjectId(participantId) }, // MongoDB ObjectId
-          ],
-        })
+        const query = [{ firebaseUid: participantId }]
 
-        if (participantUser && participantUser.firebaseUid) {
-          // Add Firebase UID to participants
-          if (!convertedParticipants.includes(participantUser.firebaseUid)) {
-            convertedParticipants.push(participantUser.firebaseUid)
+        try {
+          if (ObjectId.isValid(participantId)) {
+            query.push({ _id: new ObjectId(participantId) })
           }
+        } catch (e) {
+          console.warn('Invalid ObjectId skipped:', participantId)
+        }
+
+        const participantUser = await users.findOne({ $or: query })
+
+        if (
+          participantUser?.firebaseUid &&
+          !convertedParticipants.includes(participantUser.firebaseUid)
+        ) {
+          convertedParticipants.push(participantUser.firebaseUid)
         }
       }
 
