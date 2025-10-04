@@ -2,6 +2,8 @@ const express = require('express')
 const cors = require('cors')
 const http = require('http')
 const admin = require('firebase-admin')
+const path = require('path')
+
 const credentials = require('../credentials.json')
 const { routes } = require('./routes')
 const { initializeDbConnection } = require('./db')
@@ -17,6 +19,8 @@ admin.initializeApp({
 const app = express()
 app.use(cors())
 app.use(express.json())
+
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')))
 
 // Create HTTP server
 const server = http.createServer(app)

@@ -1,5 +1,5 @@
 const { listChatsRoute } = require('./listChatsRoute')
-const { sendMessageRoute } = require('./sendMessageRoute')
+
 const { createUserRoute } = require('./createUserRoute')
 const { createChatRoute } = require('./createChatRoute')
 const { createRoomRoute } = require('./createRoomRoute')
@@ -11,6 +11,7 @@ const {
   endCallRoute,
   getCallHistoryRoute,
 } = require('./initiateCallRoute')
+const { sendMessageRoute } = require('./sendMessageRoute')
 
 const routes = [
   createUserRoute,
