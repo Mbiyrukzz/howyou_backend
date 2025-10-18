@@ -1,39 +1,43 @@
-// middleware/uploadMiddleware.js
 const multer = require('multer')
 const path = require('path')
 const fs = require('fs')
 
 const createUploadDirs = () => {
+  // Use absolute path based on the current file's location
+  const baseDir = path.join(__dirname, '..') // Goes up to 'src' folder
   const dirs = [
-    'uploads',
-    'uploads/images',
-    'uploads/videos',
-    'uploads/files',
-    'uploads/audio',
+    path.join(baseDir, 'uploads'),
+    path.join(baseDir, 'uploads', 'images'),
+    path.join(baseDir, 'uploads', 'videos'),
+    path.join(baseDir, 'uploads', 'files'),
+    path.join(baseDir, 'uploads', 'audio'),
   ]
+
   dirs.forEach((dir) => {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true })
+      console.log('✅ Created directory:', dir)
     }
   })
 }
 
 createUploadDirs()
 
-// Configure storage
+// Configure storage with absolute paths
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    let uploadPath = 'uploads/'
+    const baseDir = path.join(__dirname, '..') // 'src' folder
+    let uploadPath = path.join(baseDir, 'uploads')
 
     // Determine upload path based on file type
     if (file.mimetype.startsWith('image/')) {
-      uploadPath += 'images/'
+      uploadPath = path.join(uploadPath, 'images')
     } else if (file.mimetype.startsWith('video/')) {
-      uploadPath += 'videos/'
+      uploadPath = path.join(uploadPath, 'videos')
     } else if (file.mimetype.startsWith('audio/')) {
-      uploadPath += 'audio/'
+      uploadPath = path.join(uploadPath, 'audio')
     } else {
-      uploadPath += 'files/'
+      uploadPath = path.join(uploadPath, 'files')
     }
 
     cb(null, uploadPath)
@@ -48,12 +52,22 @@ const storage = multer.diskStorage({
 })
 
 // File filter function
+// File filter function
 const fileFilter = (req, file, cb) => {
   // Allowed file types
   const allowedTypes = {
     image: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'],
     video: ['video/mp4', 'video/mpeg', 'video/quicktime', 'video/webm'],
-    audio: ['audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/mp4'],
+    audio: [
+      'audio/mpeg',
+      'audio/wav',
+      'audio/ogg',
+      'audio/mp4',
+      'audio/m4a',
+      'audio/x-m4a',
+      'audio/mp4a-latm',
+      'audio/aac',
+    ],
     document: [
       'application/pdf',
       'application/msword',
@@ -74,10 +88,10 @@ const fileFilter = (req, file, cb) => {
   if (allAllowedTypes.includes(file.mimetype)) {
     cb(null, true)
   } else {
+    console.log('❌ Rejected file type:', file.mimetype) // ← Add this for debugging
     cb(new Error(`File type ${file.mimetype} is not allowed`), false)
   }
 }
-
 // Create multer instance
 const upload = multer({
   storage,
@@ -161,21 +175,23 @@ const getFileType = (mimetype) => {
 
 // Helper function to get file info
 const getFileInfo = (file) => {
+  const fileType = getFileType(file.mimetype)
+  let folderName = 'files' // default
+
+  if (fileType === 'image') folderName = 'images'
+  else if (fileType === 'video') folderName = 'videos'
+  else if (fileType === 'audio') folderName = 'audio'
+
   return {
     originalName: file.originalname,
     filename: file.filename,
     mimetype: file.mimetype,
     size: file.size,
     path: file.path,
-    type: getFileType(file.mimetype),
-    url: `/uploads/${
-      getFileType(file.mimetype) === 'file'
-        ? 'files'
-        : getFileType(file.mimetype) + 's'
-    }/${file.filename}`,
+    type: fileType,
+    url: `/uploads/${folderName}/${file.filename}`,
   }
 }
-
 module.exports = {
   uploadSingle,
   uploadMultiple,

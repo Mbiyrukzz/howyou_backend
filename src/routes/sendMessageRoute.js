@@ -1,4 +1,3 @@
-// sendMessageRoute.js - FIXED with correct URLs
 const { getCollections } = require('../db')
 const {
   uploadMultiple,
@@ -7,9 +6,8 @@ const {
 const { verifyAuthToken } = require('../middleware/verifyAuthToken')
 const { ObjectId } = require('mongodb')
 
-// IMPORTANT: Update this to match your actual server URL
-// For local development, use your machine's IP address
-const SERVER_BASE_URL = process.env.SERVER_BASE_URL || 'http://localhost:5000'
+const SERVER_BASE_URL =
+  process.env.SERVER_BASE_URL || 'http://10.172.194.87:5000'
 
 const sendMessageRoute = {
   path: '/send-message',

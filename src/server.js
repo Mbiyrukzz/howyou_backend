@@ -60,6 +60,30 @@ const startServer = async () => {
       res.send({ message: 'Backend is reachable 🚀' })
     })
 
+    app.get('/debug-uploads', (req, res) => {
+      const fs = require('fs')
+      const uploadsPath = path.join(__dirname, 'uploads')
+
+      try {
+        const imagesPath = path.join(uploadsPath, 'images')
+        const files = fs.readdirSync(imagesPath)
+
+        res.json({
+          uploadsPath,
+          imagesPath,
+          filesCount: files.length,
+          files: files.slice(0, 10), // Show first 10 files
+          sampleUrl: files[0]
+            ? `http://10.172.194.87:5000/uploads/images/${files[0]}`
+            : 'No files',
+        })
+      } catch (err) {
+        res.json({
+          error: err.message,
+          uploadsPath,
+        })
+      }
+    })
     // Health check
     app.get('/health', (req, res) => {
       res.json({
