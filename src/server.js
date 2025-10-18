@@ -3,6 +3,7 @@ const cors = require('cors')
 const http = require('http')
 const admin = require('firebase-admin')
 const path = require('path')
+const multer = require('multer')
 
 const credentials = require('../credentials.json')
 const { routes } = require('./routes')
