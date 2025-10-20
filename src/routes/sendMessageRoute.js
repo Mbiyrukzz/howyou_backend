@@ -7,7 +7,7 @@ const { verifyAuthToken } = require('../middleware/verifyAuthToken')
 const { ObjectId } = require('mongodb')
 
 const SERVER_BASE_URL =
-  process.env.SERVER_BASE_URL || 'http://10.172.194.87:5000'
+  process.env.SERVER_BASE_URL || 'http://10.38.189.87:5000'
 
 const sendMessageRoute = {
   path: '/send-message',

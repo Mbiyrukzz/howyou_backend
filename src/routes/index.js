@@ -12,6 +12,7 @@ const {
   getCallHistoryRoute,
 } = require('./initiateCallRoute')
 const { sendMessageRoute } = require('./sendMessageRoute')
+const { savePushTokenRoute, getPushTokenRoute } = require('./pushNotifications')
 
 const routes = [
   createUserRoute,
@@ -27,6 +28,9 @@ const routes = [
   answerCallRoute,
   endCallRoute,
   getCallHistoryRoute,
+
+  savePushTokenRoute,
+  getPushTokenRoute,
 ]
 
 module.exports = { routes }

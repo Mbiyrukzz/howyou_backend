@@ -1,16 +1,18 @@
 const { getCollections } = require('../db')
 const { verifyAuthToken } = require('../middleware/verifyAuthToken')
 const { ObjectId } = require('mongodb')
+const {
+  sendCallNotification,
+  sendCallEndedNotification,
+  sendMissedCallNotification,
+} = require('../utils/pushNotifications')
 
-// Store WebSocket clients - this should be passed from the signaling server
-// For now, we'll use a global reference (better to pass via dependency injection)
 let wsClients = null
 
 function setWebSocketClients(clients) {
   wsClients = clients
 }
 
-// Helper to send WebSocket message to a user
 function sendToUser(userId, message) {
   if (wsClients && wsClients.has(userId)) {
     const socket = wsClients.get(userId)
@@ -22,7 +24,7 @@ function sendToUser(userId, message) {
   return false
 }
 
-// Initiate a call
+// Initiate a call - UPDATED with push notifications
 const initiateCallRoute = {
   path: '/initiate-call',
   method: 'post',
@@ -59,7 +61,7 @@ const initiateCallRoute = {
         })
       }
 
-      const { calls, chats } = getCollections()
+      const { calls, chats, users } = getCollections()
 
       // Verify chat access
       const chat = await chats.findOne({
@@ -81,6 +83,11 @@ const initiateCallRoute = {
         })
       }
 
+      // Get caller info
+      const caller = await users.findOne({ firebaseUid: req.user.uid })
+      const callerName =
+        caller?.name || req.user.displayName || req.user.email || 'Unknown'
+
       // Create call record
       const newCall = {
         chatId: new ObjectId(chatId),
@@ -99,32 +106,52 @@ const initiateCallRoute = {
 
       console.log('✅ Call record created:', callId)
 
-      // Send WebSocket notification to recipient
-      const notificationSent = sendToUser(recipientId, {
-        type: 'incoming_call',
-        caller: req.user.uid,
-        callerId: req.user.uid,
-        callerName: req.user.displayName || req.user.email,
-        callType: callType,
+      const callData = {
+        callId,
         chatId: chatId,
-        callId: callId,
+        caller: req.user.uid,
+        callerName,
+        callType,
         timestamp: new Date().toISOString(),
+      }
+
+      // Send WebSocket notification to recipient (if online)
+      const wsNotificationSent = sendToUser(recipientId, {
+        type: 'incoming_call',
+        ...callData,
       })
 
-      if (notificationSent) {
-        console.log(`✅ Call notification sent to ${recipientId}`)
+      if (wsNotificationSent) {
+        console.log(`✅ WebSocket notification sent to ${recipientId}`)
       } else {
-        console.warn(`⚠️ Recipient ${recipientId} is offline`)
+        console.warn(`⚠️ Recipient ${recipientId} is offline via WebSocket`)
+      }
+
+      // ALWAYS send push notification (works even if user is offline)
+      const pushNotificationSent = await sendCallNotification(
+        recipientId,
+        callerName,
+        callType,
+        callData
+      )
+
+      if (pushNotificationSent) {
+        console.log(`✅ Push notification sent to ${recipientId}`)
+      } else {
+        console.warn(`⚠️ Failed to send push notification to ${recipientId}`)
       }
 
       res.json({
         success: true,
         call: { ...newCall, _id: result.insertedId },
         message: `${callType} call initiated`,
-        notificationSent,
+        notificationSent: {
+          websocket: wsNotificationSent,
+          push: pushNotificationSent,
+        },
       })
     } catch (err) {
-      console.error('❌ Error initiating call:', err)
+      console.error('❌ Error initiating call:', err.stack) // Log full stack trace
       res.status(500).json({
         success: false,
         error: 'Failed to initiate call',
@@ -134,7 +161,7 @@ const initiateCallRoute = {
   },
 }
 
-// Answer a call
+// Answer a call - UPDATED
 const answerCallRoute = {
   path: '/answer-call/:callId',
   method: 'post',
@@ -157,7 +184,7 @@ const answerCallRoute = {
         })
       }
 
-      const { calls } = getCollections()
+      const { calls, users } = getCollections()
 
       const call = await calls.findOne({
         _id: new ObjectId(callId),
@@ -179,6 +206,16 @@ const answerCallRoute = {
 
       if (accepted) {
         updateData.actualStartTime = new Date()
+      } else {
+        // Send missed call notification
+        const caller = await users.findOne({ firebaseUid: call.callerId })
+        const callerName = caller?.name || 'Unknown'
+
+        await sendMissedCallNotification(
+          call.callerId,
+          req.user.displayName || req.user.email,
+          call.callType
+        )
       }
 
       await calls.updateOne({ _id: new ObjectId(callId) }, { $set: updateData })
@@ -210,7 +247,7 @@ const answerCallRoute = {
   },
 }
 
-// End a call
+// End a call - UPDATED
 const endCallRoute = {
   path: '/end-call/:callId',
   method: 'post',
@@ -228,7 +265,7 @@ const endCallRoute = {
         })
       }
 
-      const { calls } = getCollections()
+      const { calls, users } = getCollections()
 
       const call = await calls.findOne({
         _id: new ObjectId(callId),
@@ -270,6 +307,13 @@ const endCallRoute = {
         timestamp: new Date().toISOString(),
       })
 
+      // Send push notification for call ended
+      const currentUser = await users.findOne({ firebaseUid: req.user.uid })
+      const currentUserName =
+        currentUser?.name || req.user.displayName || req.user.email || 'Unknown'
+
+      await sendCallEndedNotification(otherUserId, currentUserName, duration)
+
       console.log('✅ Call ended:', { callId, duration })
 
       res.json({
@@ -293,7 +337,7 @@ const endCallRoute = {
   },
 }
 
-// Get call history
+// Get call history (unchanged)
 const getCallHistoryRoute = {
   path: '/call-history/:chatId',
   method: 'get',

@@ -148,6 +148,15 @@ function setupSignalingServer(server) {
         })
         break
 
+      case 'screen-sharing': // New case for screen sharing
+        forwardToUser(data.to, {
+          type: 'screen-sharing',
+          enabled: data.enabled,
+          from: senderId,
+          chatId: data.chatId,
+        })
+        break
+
       case 'end-call':
         handleEndCall(senderId, data)
         break
