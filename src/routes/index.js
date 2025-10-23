@@ -13,10 +13,13 @@ const {
 } = require('./initiateCallRoute')
 const { sendMessageRoute } = require('./sendMessageRoute')
 const { savePushTokenRoute, getPushTokenRoute } = require('./pushNotifications')
+const { deleteChatRoute } = require('./deleteChatRoutes')
 
 const routes = [
   createUserRoute,
+
   createChatRoute,
+  deleteChatRoute,
   sendMessageRoute,
   listChatsRoute,
   listMessagesRoute,
