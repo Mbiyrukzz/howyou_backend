@@ -15,6 +15,7 @@ const { sendMessageRoute } = require('./sendMessageRoute')
 const { savePushTokenRoute, getPushTokenRoute } = require('./pushNotifications')
 const { deleteChatRoute } = require('./deleteChatRoutes')
 const { deleteMessageRoute } = require('./deleteMessageRoute')
+const { updateMessageRoute } = require('./updateMessageRoute')
 
 const routes = [
   createUserRoute,
@@ -25,6 +26,7 @@ const routes = [
   listChatsRoute,
   listMessagesRoute,
   deleteMessageRoute,
+  updateMessageRoute,
 
   listUsersRoute,
   createRoomRoute,
