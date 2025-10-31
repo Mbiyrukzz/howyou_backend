@@ -16,6 +16,24 @@ const { savePushTokenRoute, getPushTokenRoute } = require('./pushNotifications')
 const { deleteChatRoute } = require('./deleteChatRoutes')
 const { deleteMessageRoute } = require('./deleteMessageRoute')
 const { updateMessageRoute } = require('./updateMessageRoute')
+const {
+  markMessagesAsReadRoute,
+  markMessagesAsDeliveredRoute,
+} = require('./markMessagesStatus')
+const {
+  createStatusRoute,
+  getStatusesRoute,
+  deleteStatusRoute,
+} = require('./createStatusRoute')
+const {
+  createPostRoute,
+  getPostRoute,
+  updatePostRoute,
+  deletePostRoute,
+  toggleLikeRoute,
+  getPostsRoute,
+} = require('./createPostRoute')
+const { getMyStatusRoute } = require('./getMyStatusRoute')
 
 const routes = [
   createUserRoute,
@@ -27,6 +45,21 @@ const routes = [
   listMessagesRoute,
   deleteMessageRoute,
   updateMessageRoute,
+
+  markMessagesAsReadRoute,
+  markMessagesAsDeliveredRoute,
+
+  createStatusRoute,
+  getStatusesRoute,
+  deleteStatusRoute,
+  getMyStatusRoute,
+
+  createPostRoute,
+  getPostRoute,
+  getPostsRoute,
+  updatePostRoute,
+  deletePostRoute,
+  toggleLikeRoute,
 
   listUsersRoute,
   createRoomRoute,

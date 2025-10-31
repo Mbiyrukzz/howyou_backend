@@ -31,6 +31,8 @@ const getCollections = () => {
     participants: database.collection('participants'),
     calls: database.collection('calls'),
     voice: database.collection('voice'),
+    statuses: db.collection('statuses'),
+    posts: db.collection('posts'),
   }
 }
 

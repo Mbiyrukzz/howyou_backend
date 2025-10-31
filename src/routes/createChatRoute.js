@@ -1,11 +1,12 @@
 const { getCollections } = require('../db')
+const { updateLastSeen } = require('../middleware/updateLastSeen')
 const { verifyAuthToken } = require('../middleware/verifyAuthToken')
 const { ObjectId } = require('mongodb')
 
 const createChatRoute = {
   path: '/create-chat',
   method: 'post',
-  middleware: [verifyAuthToken],
+  middleware: [verifyAuthToken, updateLastSeen],
   handler: async (req, res) => {
     try {
       const { participants = [], name } = req.body

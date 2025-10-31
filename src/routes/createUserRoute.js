@@ -1,3 +1,4 @@
+// backend/routes/createUserRoute.js
 const { getCollections } = require('../db')
 
 const createUserRoute = {
@@ -20,6 +21,8 @@ const createUserRoute = {
         email,
         name,
         createdAt: new Date(),
+        lastSeen: new Date(), // Add lastSeen
+        online: false, // Initialize as offline
       })
 
       res.json({ success: true, userId: result.insertedId })

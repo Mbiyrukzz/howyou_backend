@@ -1,10 +1,11 @@
 const { getCollections } = require('../db')
+const { updateLastSeen } = require('../middleware/updateLastSeen')
 const { verifyAuthToken } = require('../middleware/verifyAuthToken')
 
 const listUsersRoute = {
   method: 'get',
   path: '/list-users',
-  middleware: [verifyAuthToken],
+  middleware: [verifyAuthToken, updateLastSeen],
   handler: async (req, res) => {
     try {
       console.log('👉 list-users called by:', req.user?.uid, req.user?.user_id)
