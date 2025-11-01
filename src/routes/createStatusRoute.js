@@ -112,7 +112,6 @@ const createStatusRoute = {
   },
 }
 
-// routes/getStatusesRoute.js - Enhanced with better logging
 const getStatusesRoute = {
   path: '/statuses',
   method: 'get',
@@ -133,29 +132,25 @@ const getStatusesRoute = {
       }
 
       const now = new Date()
-      console.log('Fetching statuses created before:', now)
 
-      const active = await statuses
-        .find({ expiresAt: { $gt: now } })
+      // Find all active statuses EXCEPT the current user's
+      // This ensures "Your Story" appears separately at the beginning
+      const allStatuses = await statuses
+        .find({
+          userId: { $ne: req.user.uid }, // Exclude current user
+          expiresAt: { $gt: now }, // Only non-expired statuses
+        })
         .sort({ createdAt: -1 })
         .toArray()
 
-      console.log(`✅ Found ${active.length} active statuses`)
+      console.log(`✅ Found ${allStatuses.length} statuses from other users`)
 
-      // Log first status for debugging
-      if (active.length > 0) {
-        console.log('Sample status:', {
-          id: active[0]._id,
-          userName: active[0].userName,
-          createdAt: active[0].createdAt,
-          expiresAt: active[0].expiresAt,
-        })
-      }
-
-      res.json({ success: true, statuses: active })
+      res.json({
+        success: true,
+        statuses: allStatuses,
+      })
     } catch (err) {
       console.error('❌ Get statuses error:', err)
-      console.error('Stack:', err.stack)
       res.status(500).json({
         success: false,
         error: 'Failed to fetch statuses',
