@@ -162,6 +162,8 @@ const initiateCallRoute = {
 }
 
 // Answer a call - UPDATED
+// routes/callRoutes.js - Updated answerCallRoute
+
 const answerCallRoute = {
   path: '/answer-call/:callId',
   method: 'post',
@@ -199,6 +201,11 @@ const answerCallRoute = {
         })
       }
 
+      // Get recipient info for notification
+      const recipient = await users.findOne({ firebaseUid: req.user.uid })
+      const recipientName =
+        recipient?.name || req.user.displayName || req.user.email || 'Unknown'
+
       const updateData = {
         status: accepted ? 'accepted' : 'declined',
         answeredAt: new Date(),
@@ -207,25 +214,23 @@ const answerCallRoute = {
       if (accepted) {
         updateData.actualStartTime = new Date()
       } else {
-        // Send missed call notification
-        const caller = await users.findOne({ firebaseUid: call.callerId })
-        const callerName = caller?.name || 'Unknown'
-
+        // Send missed call notification to caller
         await sendMissedCallNotification(
           call.callerId,
-          req.user.displayName || req.user.email,
+          recipientName,
           call.callType
         )
       }
 
       await calls.updateOne({ _id: new ObjectId(callId) }, { $set: updateData })
 
-      // Notify caller about the response
+      // Notify caller about the response - INCLUDE recipientName
       const notificationType = accepted ? 'call_accepted' : 'call_rejected'
       sendToUser(call.callerId, {
         type: notificationType,
         callId: callId,
         recipientId: req.user.uid,
+        recipientName: recipientName, // ← ADDED THIS
         timestamp: new Date().toISOString(),
       })
 
