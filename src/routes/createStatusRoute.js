@@ -1,4 +1,4 @@
-// routes/createStatusRoute.js - Enhanced with better logging
+// routes/createStatusRoute.js - Enhanced with 5 status per day limit
 const { getCollections } = require('../db')
 const {
   uploadMultiple,
@@ -7,6 +7,7 @@ const {
 const { verifyAuthToken } = require('../middleware/verifyAuthToken')
 
 const SERVER_BASE_URL = process.env.SERVER_BASE_URL || 'http://localhost:5000'
+const MAX_STATUSES_PER_DAY = 5
 
 const createStatusRoute = {
   path: '/status',
@@ -41,6 +42,37 @@ const createStatusRoute = {
       }
 
       const { statuses, users } = getCollections()
+
+      // ═══════════════════════════════════════════════════════
+      // 🔥 CHECK DAILY LIMIT (5 statuses per day)
+      // ═══════════════════════════════════════════════════════
+      const todayStart = new Date()
+      todayStart.setHours(0, 0, 0, 0)
+
+      const todayEnd = new Date()
+      todayEnd.setHours(23, 59, 59, 999)
+
+      const todayStatusCount = await statuses.countDocuments({
+        userId: req.user.uid,
+        createdAt: {
+          $gte: todayStart,
+          $lte: todayEnd,
+        },
+      })
+
+      console.log(
+        `📊 User has created ${todayStatusCount}/${MAX_STATUSES_PER_DAY} statuses today`
+      )
+
+      if (todayStatusCount >= MAX_STATUSES_PER_DAY) {
+        console.log('❌ Daily status limit reached')
+        return res.status(429).json({
+          success: false,
+          error: `Daily limit reached. You can only post ${MAX_STATUSES_PER_DAY} statuses per day.`,
+          limit: MAX_STATUSES_PER_DAY,
+          current: todayStatusCount,
+        })
+      }
 
       // Verify user exists
       console.log('Looking for user with firebaseUid:', req.user.uid)
@@ -99,14 +131,19 @@ const createStatusRoute = {
       }
 
       console.log('✅ Status created:', createdStatus._id)
-      res.json({ success: true, status: createdStatus })
+      res.json({
+        success: true,
+        status: createdStatus,
+        dailyCount: todayStatusCount + 1,
+        dailyLimit: MAX_STATUSES_PER_DAY,
+      })
     } catch (err) {
       console.error('❌ Create status error:', err)
       console.error('Stack:', err.stack)
       res.status(500).json({
         success: false,
         error: 'Failed to create status',
-        details: err.message, // Add error details for debugging
+        details: err.message,
       })
     }
   },
@@ -134,20 +171,48 @@ const getStatusesRoute = {
       const now = new Date()
 
       // Find all active statuses EXCEPT the current user's
-      // This ensures "Your Story" appears separately at the beginning
       const allStatuses = await statuses
         .find({
-          userId: { $ne: req.user.uid }, // Exclude current user
-          expiresAt: { $gt: now }, // Only non-expired statuses
+          userId: { $ne: req.user.uid },
+          expiresAt: { $gt: now },
         })
         .sort({ createdAt: -1 })
         .toArray()
 
-      console.log(`✅ Found ${allStatuses.length} statuses from other users`)
+      // Group statuses by user
+      const groupedByUser = {}
+      allStatuses.forEach((status) => {
+        if (!groupedByUser[status.userId]) {
+          groupedByUser[status.userId] = {
+            userId: status.userId,
+            userName: status.userName,
+            userAvatarColor: status.userAvatarColor,
+            statuses: [],
+          }
+        }
+        groupedByUser[status.userId].statuses.push(status)
+      })
+
+      // Convert to array and add the first status data for preview
+      const groupedStatuses = Object.values(groupedByUser).map((group) => ({
+        _id: group.statuses[0]._id, // Use first status ID
+        userId: group.userId,
+        userName: group.userName,
+        userAvatarColor: group.userAvatarColor,
+        fileUrl: group.statuses[0].fileUrl, // Show first status as preview
+        fileType: group.statuses[0].fileType,
+        statusCount: group.statuses.length,
+        statuses: group.statuses, // All statuses for this user
+        createdAt: group.statuses[0].createdAt,
+      }))
+
+      console.log(
+        `✅ Found ${allStatuses.length} statuses from ${groupedStatuses.length} users`
+      )
 
       res.json({
         success: true,
-        statuses: allStatuses,
+        statuses: groupedStatuses,
       })
     } catch (err) {
       console.error('❌ Get statuses error:', err)

@@ -23,24 +23,26 @@ const getMyStatusRoute = {
 
       const now = new Date()
 
-      // Find the user’s active (non-expired) status
-      const myStatus = await statuses.findOne({
-        userId: req.user.uid,
-        expiresAt: { $gt: now },
-      })
+      // Find ALL the user's active (non-expired) statuses
+      const myStatuses = await statuses
+        .find({
+          userId: req.user.uid,
+          expiresAt: { $gt: now },
+        })
+        .sort({ createdAt: -1 }) // Most recent first
+        .toArray()
 
-      if (!myStatus) {
-        console.log('ℹ️ No active status found for this user.')
-        return res.json({ success: true, status: null })
+      if (!myStatuses || myStatuses.length === 0) {
+        console.log('ℹ️ No active statuses found for this user.')
+        return res.json({ success: true, statuses: [] })
       }
 
-      console.log('✅ Found active status for user:', {
-        id: myStatus._id,
-        createdAt: myStatus.createdAt,
-        expiresAt: myStatus.expiresAt,
-      })
+      console.log('✅ Found', myStatuses.length, 'active status(es) for user')
 
-      res.json({ success: true, status: myStatus })
+      res.json({
+        success: true,
+        statuses: myStatuses, // ← Return ALL your active statuses
+      })
     } catch (err) {
       console.error('❌ Get my status error:', err)
       res.status(500).json({
