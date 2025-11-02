@@ -28,29 +28,38 @@ const deleteChatRoute = {
 
       const { chats, messages } = getCollections()
 
-      // Additional check: Only allow deletion if user is the creator or it's a 1-on-1 chat
-      const canDelete =
-        chat.createdBy === currentUserId || // User created the chat
-        (!chat.isGroup && chat.participants.length === 2) // 1-on-1 chat
+      // ✅ FIXED: Proper deletion logic
+      // - For 1-on-1 chats (!isGroup): any participant can delete
+      // - For group chats (isGroup): only the creator can delete
+      let canDelete = false
+      let reason = ''
+
+      if (!chat.isGroup) {
+        // 1-on-1 chat - any participant can delete
+        canDelete = chat.participants.includes(currentUserId)
+        reason = '1-on-1 chat, participant can delete'
+      } else {
+        // Group chat - only creator can delete
+        canDelete = chat.createdBy === currentUserId
+        reason =
+          chat.createdBy === currentUserId
+            ? 'Group chat, user is creator'
+            : 'Group chat, user is not creator'
+      }
 
       console.log('  Can delete?', canDelete)
-      console.log(
-        '  Reason: createdBy =',
-        chat.createdBy,
-        ', currentUser =',
-        currentUserId
-      )
-      console.log(
-        '  Is group?',
-        chat.isGroup,
-        ', participants:',
-        chat.participants.length
-      )
+      console.log('  Reason:', reason)
+      console.log('  Is group?', chat.isGroup)
+      console.log('  Created by:', chat.createdBy)
+      console.log('  Current user:', currentUserId)
+      console.log('  Participants:', chat.participants)
 
       if (!canDelete) {
         return res.status(403).json({
           success: false,
-          error: 'Only the chat creator can delete group chats',
+          error: chat.isGroup
+            ? 'Only the chat creator can delete group chats'
+            : 'You do not have permission to delete this chat',
         })
       }
 

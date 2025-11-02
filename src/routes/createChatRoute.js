@@ -1,3 +1,6 @@
+// ============================================================================
+// CREATE CHAT ROUTE (create-chat.js)
+// ============================================================================
 const { getCollections } = require('../db')
 const { updateLastSeen } = require('../middleware/updateLastSeen')
 const { verifyAuthToken } = require('../middleware/verifyAuthToken')
@@ -36,8 +39,12 @@ const createChatRoute = {
       const finalParticipants = [...convertedParticipants]
       console.log('👥 Final participants:', finalParticipants)
 
+      // ✅ Determine if this is a group chat
+      // A group chat is ONLY when there are MORE than 2 participants
+      const isGroup = finalParticipants.length > 2
+
       // ✅ Handle 1-on-1 chat duplicate prevention
-      if (finalParticipants.length === 2 && !name) {
+      if (finalParticipants.length === 2) {
         // Fetch all 1-on-1 chats of the current user
         const userChats = await chats
           .find({ participants: currentUserId, isGroup: false })
@@ -52,7 +59,7 @@ const createChatRoute = {
         })
 
         if (existingChat) {
-          console.log('💬 Existing chat found:', existingChat._id)
+          console.log('💬 Existing 1-on-1 chat found:', existingChat._id)
           return res.json({
             success: true,
             chat: existingChat,
@@ -64,18 +71,22 @@ const createChatRoute = {
       // ✅ Create new chat
       const newChat = {
         participants: finalParticipants,
-        name: name || null,
+        name: name || null, // Name is optional for 1-on-1, required for groups
         createdBy: currentUserId,
         createdAt: new Date(),
         lastActivity: new Date(),
         lastMessage: null,
-        isGroup: finalParticipants.length > 2 || Boolean(name),
+        isGroup, // Only true if more than 2 participants
       }
 
       const result = await chats.insertOne(newChat)
       const createdChat = { ...newChat, _id: result.insertedId }
 
-      console.log('✅ Chat created:', createdChat._id)
+      console.log('✅ Chat created:', {
+        id: createdChat._id,
+        isGroup: createdChat.isGroup,
+        participantCount: finalParticipants.length,
+      })
 
       res.json({
         success: true,
