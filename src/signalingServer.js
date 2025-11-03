@@ -3,16 +3,16 @@ const url = require('url')
 
 function setupSignalingServer(server) {
   const wss = new WebSocketServer({ noServer: true })
-  const clients = new Map() // Map<userId, ws>
+  const clients = new Map() // Map<userId, {ws, metadata}>
   const callRooms = new Map() // Map<chatId, Set<userId>>
+  const typingUsers = new Map() // Map<chatId, Map<userId, timeoutId>>
 
-  // Handle WebSocket upgrade for BOTH /notifications AND / (root)
+  // Handle WebSocket upgrade
   server.on('upgrade', (request, socket, head) => {
     const pathname = url.parse(request.url).pathname
 
     console.log(`🔌 WebSocket upgrade request: ${pathname}`)
 
-    // Accept connections on /, /notifications, or /signaling
     if (
       pathname === '/' ||
       pathname === '/notifications' ||
@@ -40,8 +40,15 @@ function setupSignalingServer(server) {
       return
     }
 
-    // Store connection
-    clients.set(userId, ws)
+    // Store connection with metadata
+    clients.set(userId, {
+      ws,
+      userId,
+      chatId,
+      online: true,
+      lastActivity: Date.now(),
+    })
+
     console.log(`✅ User connected: ${userId} on ${pathname}`)
 
     // If chatId provided, add to call room
@@ -52,7 +59,6 @@ function setupSignalingServer(server) {
       callRooms.get(chatId).add(userId)
       console.log(`📞 User ${userId} joined call room: ${chatId}`)
 
-      // Notify other users in the room
       broadcastToRoom(chatId, userId, {
         type: 'user-joined',
         userId,
@@ -60,15 +66,24 @@ function setupSignalingServer(server) {
       })
     }
 
+    // Broadcast online status to all users
+    broadcastToAll({
+      type: 'user-online',
+      userId,
+      timestamp: new Date().toISOString(),
+    })
+
     // Send connection confirmation
     ws.send(
       JSON.stringify({
         type: 'connected',
         userId,
         timestamp: new Date().toISOString(),
+        onlineUsers: Array.from(clients.keys()),
       })
     )
 
+    // Handle messages
     ws.on('message', (message) => {
       try {
         const data = JSON.parse(message)
@@ -84,10 +99,34 @@ function setupSignalingServer(server) {
       }
     })
 
+    // Handle disconnection
     ws.on('close', () => {
       clients.delete(userId)
 
-      // Remove from all call rooms
+      // Broadcast offline status
+      broadcastToAll({
+        type: 'user-offline',
+        userId,
+        timestamp: new Date().toISOString(),
+      })
+
+      // Clear typing indicators
+      typingUsers.forEach((chatTyping, chatId) => {
+        if (chatTyping.has(userId)) {
+          const timeoutId = chatTyping.get(userId)
+          clearTimeout(timeoutId)
+          chatTyping.delete(userId)
+
+          // Notify others in chat
+          broadcastToChatMembers(chatId, userId, {
+            type: 'typing-stopped',
+            userId,
+            chatId,
+          })
+        }
+      })
+
+      // Remove from call rooms
       callRooms.forEach((users, roomChatId) => {
         if (users.has(userId)) {
           users.delete(userId)
@@ -97,7 +136,6 @@ function setupSignalingServer(server) {
             chatId: roomChatId,
           })
 
-          // Clean up empty rooms
           if (users.size === 0) {
             callRooms.delete(roomChatId)
           }
@@ -117,6 +155,7 @@ function setupSignalingServer(server) {
     console.log(`📨 Message from ${senderId}:`, data.type)
 
     switch (data.type) {
+      // ===== CALL SIGNALING =====
       case 'join-call':
         handleJoinCall(senderId, data)
         break
@@ -148,7 +187,7 @@ function setupSignalingServer(server) {
         })
         break
 
-      case 'screen-sharing': // New case for screen sharing
+      case 'screen-sharing':
         forwardToUser(data.to, {
           type: 'screen-sharing',
           enabled: data.enabled,
@@ -161,11 +200,38 @@ function setupSignalingServer(server) {
         handleEndCall(senderId, data)
         break
 
+      // ===== MESSAGING =====
+      case 'new-message':
+        handleNewMessage(senderId, data)
+        break
+
+      case 'message-delivered':
+        handleMessageDelivered(senderId, data)
+        break
+
+      case 'message-read':
+        handleMessageRead(senderId, data)
+        break
+
+      // ===== TYPING INDICATORS =====
+      case 'typing-start':
+        handleTypingStart(senderId, data)
+        break
+
+      case 'typing-stop':
+        handleTypingStop(senderId, data)
+        break
+
+      // ===== PRESENCE =====
+      case 'update-status':
+        handleStatusUpdate(senderId, data)
+        break
+
       case 'ping':
-        // Respond to ping to keep connection alive
         const socket = clients.get(senderId)
-        if (socket && socket.readyState === socket.OPEN) {
-          socket.send(JSON.stringify({ type: 'pong' }))
+        if (socket && socket.ws.readyState === socket.ws.OPEN) {
+          socket.ws.send(JSON.stringify({ type: 'pong' }))
+          socket.lastActivity = Date.now()
         }
         break
 
@@ -174,6 +240,7 @@ function setupSignalingServer(server) {
     }
   }
 
+  // ===== CALL HANDLERS =====
   function handleJoinCall(userId, data) {
     const { chatId } = data
 
@@ -184,7 +251,6 @@ function setupSignalingServer(server) {
     callRooms.get(chatId).add(userId)
     console.log(`📞 User ${userId} joined call room: ${chatId}`)
 
-    // Notify existing users
     broadcastToRoom(chatId, userId, {
       type: 'user-joined',
       userId,
@@ -195,14 +261,12 @@ function setupSignalingServer(server) {
   function handleEndCall(userId, data) {
     const { chatId } = data
 
-    // Notify all users in the room
     broadcastToRoom(chatId, null, {
       type: 'call-ended',
       userId,
       chatId,
     })
 
-    // Remove user from room
     if (callRooms.has(chatId)) {
       callRooms.get(chatId).delete(userId)
 
@@ -214,11 +278,146 @@ function setupSignalingServer(server) {
     console.log(`🔴 User ${userId} ended call in room: ${chatId}`)
   }
 
-  function forwardToUser(userId, message) {
-    const socket = clients.get(userId)
+  // ===== MESSAGE HANDLERS =====
+  function handleNewMessage(senderId, data) {
+    const { chatId, message, participants } = data
 
-    if (socket && socket.readyState === socket.OPEN) {
-      socket.send(JSON.stringify(message))
+    console.log(`💬 New message in chat ${chatId} from ${senderId}`)
+
+    // Broadcast to all chat participants except sender
+    participants.forEach((participantId) => {
+      if (participantId !== senderId) {
+        forwardToUser(participantId, {
+          type: 'new_message',
+          chatId,
+          message,
+          senderId,
+          timestamp: new Date().toISOString(),
+        })
+      }
+    })
+
+    // Stop typing indicator for sender
+    handleTypingStop(senderId, { chatId })
+  }
+
+  function handleMessageDelivered(userId, data) {
+    const { messageId, chatId, senderId } = data
+
+    forwardToUser(senderId, {
+      type: 'message-delivered',
+      messageId,
+      chatId,
+      deliveredBy: userId,
+      timestamp: new Date().toISOString(),
+    })
+  }
+
+  function handleMessageRead(userId, data) {
+    const { messageId, chatId, senderId } = data
+
+    forwardToUser(senderId, {
+      type: 'message-read',
+      messageId,
+      chatId,
+      readBy: userId,
+      timestamp: new Date().toISOString(),
+    })
+  }
+
+  // ===== TYPING HANDLERS =====
+  function handleTypingStart(userId, data) {
+    const { chatId, participants } = data
+
+    if (!typingUsers.has(chatId)) {
+      typingUsers.set(chatId, new Map())
+    }
+
+    const chatTyping = typingUsers.get(chatId)
+
+    // Clear existing timeout
+    if (chatTyping.has(userId)) {
+      clearTimeout(chatTyping.get(userId))
+    }
+
+    // Set new timeout (auto-stop after 5 seconds)
+    const timeoutId = setTimeout(() => {
+      handleTypingStop(userId, { chatId, participants })
+    }, 5000)
+
+    chatTyping.set(userId, timeoutId)
+
+    // Broadcast to chat participants
+    participants.forEach((participantId) => {
+      if (participantId !== userId) {
+        forwardToUser(participantId, {
+          type: 'typing',
+          userId,
+          chatId,
+          isTyping: true,
+        })
+      }
+    })
+
+    console.log(`⌨️ User ${userId} started typing in chat ${chatId}`)
+  }
+
+  function handleTypingStop(userId, data) {
+    const { chatId, participants } = data
+
+    if (typingUsers.has(chatId)) {
+      const chatTyping = typingUsers.get(chatId)
+
+      if (chatTyping.has(userId)) {
+        clearTimeout(chatTyping.get(userId))
+        chatTyping.delete(userId)
+      }
+    }
+
+    // Broadcast to chat participants
+    if (participants) {
+      participants.forEach((participantId) => {
+        if (participantId !== userId) {
+          forwardToUser(participantId, {
+            type: 'typing',
+            userId,
+            chatId,
+            isTyping: false,
+          })
+        }
+      })
+    }
+
+    console.log(`⌨️ User ${userId} stopped typing in chat ${chatId}`)
+  }
+
+  // ===== STATUS HANDLERS =====
+  function handleStatusUpdate(userId, data) {
+    const { status, customMessage } = data
+
+    const client = clients.get(userId)
+    if (client) {
+      client.status = status
+      client.customMessage = customMessage
+    }
+
+    broadcastToAll({
+      type: 'user-status-updated',
+      userId,
+      status,
+      customMessage,
+      timestamp: new Date().toISOString(),
+    })
+
+    console.log(`📍 User ${userId} status updated to: ${status}`)
+  }
+
+  // ===== UTILITY FUNCTIONS =====
+  function forwardToUser(userId, message) {
+    const client = clients.get(userId)
+
+    if (client && client.ws.readyState === client.ws.OPEN) {
+      client.ws.send(JSON.stringify(message))
       console.log(`✉️ Forwarded message to ${userId}:`, message.type)
     } else {
       console.warn(`⚠️ User ${userId} not connected or socket not ready`)
@@ -237,19 +436,55 @@ function setupSignalingServer(server) {
     })
   }
 
+  function broadcastToChatMembers(chatId, excludeUserId, message) {
+    // This requires knowing chat participants - you'll need to pass this info
+    // For now, we'll broadcast to all connected users in that chat
+    clients.forEach((client, userId) => {
+      if (userId !== excludeUserId && client.chatId === chatId) {
+        forwardToUser(userId, message)
+      }
+    })
+  }
+
+  function broadcastToAll(message, excludeUserId = null) {
+    clients.forEach((client, userId) => {
+      if (userId !== excludeUserId) {
+        forwardToUser(userId, message)
+      }
+    })
+  }
+
   // Keep-alive ping every 30 seconds
   setInterval(() => {
-    clients.forEach((ws, userId) => {
-      if (ws.readyState === ws.OPEN) {
-        ws.send(JSON.stringify({ type: 'ping' }))
+    const now = Date.now()
+    clients.forEach((client, userId) => {
+      if (client.ws.readyState === client.ws.OPEN) {
+        // Check if client is inactive (no activity for 5 minutes)
+        if (now - client.lastActivity > 300000) {
+          console.warn(`⚠️ Client ${userId} inactive, closing connection`)
+          client.ws.close(1000, 'Inactive')
+          return
+        }
+
+        client.ws.send(JSON.stringify({ type: 'ping' }))
       }
     })
   }, 30000)
 
+  // Cleanup inactive connections every minute
+  setInterval(() => {
+    const now = Date.now()
+    clients.forEach((client, userId) => {
+      if (client.ws.readyState !== client.ws.OPEN) {
+        clients.delete(userId)
+        console.log(`🧹 Cleaned up closed connection for user ${userId}`)
+      }
+    })
+  }, 60000)
+
   console.log('✅ WebRTC signaling server initialized')
   console.log('📡 Accepting connections on: /, /notifications, /signaling')
 
-  // Return clients Map so it can be used by API routes
   return clients
 }
 

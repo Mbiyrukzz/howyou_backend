@@ -14,13 +14,25 @@ function setWebSocketClients(clients) {
 }
 
 function sendToUser(userId, message) {
-  if (wsClients && wsClients.has(userId)) {
-    const socket = wsClients.get(userId)
-    if (socket.readyState === socket.OPEN) {
-      socket.send(JSON.stringify(message))
-      return true
-    }
+  const client = wsClients?.get(userId)
+  if (!client) {
+    console.warn(`⚠️ No active WS client for ${userId}`)
+    return false
   }
+
+  const socket = client.ws
+  if (!socket || typeof socket.send !== 'function') {
+    console.warn(`⚠️ Invalid WebSocket object for ${userId}`)
+    return false
+  }
+
+  if (socket.readyState === socket.OPEN) {
+    socket.send(JSON.stringify(message))
+    console.log(`📨 Sent WS message to ${userId}: ${message.type}`)
+    return true
+  }
+
+  console.warn(`⚠️ WebSocket not open for ${userId}`)
   return false
 }
 
