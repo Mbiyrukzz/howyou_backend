@@ -34,6 +34,7 @@ const {
   getPostsRoute,
 } = require('./createPostRoute')
 const { getMyStatusRoute } = require('./getMyStatusRoute')
+const { updateLastSeenRoute } = require('./updateLastSeen')
 
 const routes = [
   createUserRoute,
@@ -48,6 +49,7 @@ const routes = [
 
   markMessagesAsReadRoute,
   markMessagesAsDeliveredRoute,
+  updateLastSeenRoute,
 
   createStatusRoute,
   getStatusesRoute,

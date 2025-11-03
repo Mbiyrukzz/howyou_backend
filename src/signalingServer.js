@@ -222,6 +222,10 @@ function setupSignalingServer(server) {
         handleTypingStop(senderId, data)
         break
 
+      case 'update-last-seen':
+        handleLastSeenUpdate(senderId, data)
+        break
+
       // ===== PRESENCE =====
       case 'update-status':
         handleStatusUpdate(senderId, data)
@@ -284,23 +288,20 @@ function setupSignalingServer(server) {
 
     console.log(`💬 New message in chat ${chatId} from ${senderId}`)
 
-    // Broadcast to all chat participants except sender
+    // Broadcast to all chat participants (including sender for sync)
     participants.forEach((participantId) => {
-      if (participantId !== senderId) {
-        forwardToUser(participantId, {
-          type: 'new_message',
-          chatId,
-          message,
-          senderId,
-          timestamp: new Date().toISOString(),
-        })
-      }
+      forwardToUser(participantId, {
+        type: 'new-message',
+        chatId,
+        message,
+        senderId,
+        timestamp: new Date().toISOString(),
+      })
     })
 
     // Stop typing indicator for sender
     handleTypingStop(senderId, { chatId })
   }
-
   function handleMessageDelivered(userId, data) {
     const { messageId, chatId, senderId } = data
 
@@ -389,6 +390,32 @@ function setupSignalingServer(server) {
     }
 
     console.log(`⌨️ User ${userId} stopped typing in chat ${chatId}`)
+  }
+
+  // Add this handler function:
+  function handleLastSeenUpdate(userId, data) {
+    const { chatId, participants } = data
+
+    const client = clients.get(userId)
+    if (client) {
+      client.lastSeen = Date.now()
+    }
+
+    // Broadcast to chat participants
+    if (participants) {
+      participants.forEach((participantId) => {
+        if (participantId !== userId) {
+          forwardToUser(participantId, {
+            type: 'user-last-seen',
+            userId,
+            chatId,
+            timestamp: new Date().toISOString(),
+          })
+        }
+      })
+    }
+
+    console.log(`👁️ User ${userId} last seen updated in chat ${chatId}`)
   }
 
   // ===== STATUS HANDLERS =====
