@@ -16,7 +16,6 @@ const deleteMessageRoute = {
       const { messages, chats } = getCollections()
       const messageId = req.params.messageId
 
-      // Validate ObjectId
       if (!ObjectId.isValid(messageId)) {
         return res.status(400).json({
           success: false,
@@ -24,7 +23,6 @@ const deleteMessageRoute = {
         })
       }
 
-      // Get message details (from middleware)
       const message = req.message
       if (!message) {
         return res.status(404).json({
@@ -34,6 +32,27 @@ const deleteMessageRoute = {
       }
 
       const chatId = message.chatId.toString()
+
+      // ✅ Get chat BEFORE deleting message
+      const chat = await chats.findOne({ _id: new ObjectId(chatId) })
+
+      // ✅ ADD DEBUG LOGGING
+      console.log('📊 Debug Info:')
+      console.log('  - Chat found:', !!chat)
+      console.log('  - Chat participants:', chat?.participants)
+      console.log('  - global.wsClients exists:', !!global.wsClients)
+      console.log('  - wsClients size:', global.wsClients?.size)
+
+      if (chat && global.wsClients) {
+        console.log('  - Connected users:', Array.from(global.wsClients.keys()))
+      }
+
+      if (!chat) {
+        return res.status(404).json({
+          success: false,
+          error: 'Chat not found',
+        })
+      }
 
       // Delete the message
       const deleteResult = await messages.deleteOne({
@@ -50,7 +69,7 @@ const deleteMessageRoute = {
 
       console.log(`✅ Message deleted successfully: ${messageId}`)
 
-      // Update chat's lastMessage if this was the most recent message
+      // Update chat's lastMessage
       const latestMessage = await messages.findOne(
         { chatId: new ObjectId(chatId) },
         { sort: { createdAt: -1 } }
@@ -69,7 +88,6 @@ const deleteMessageRoute = {
           }
         )
       } else {
-        // No messages left in chat
         await chats.updateOne(
           { _id: new ObjectId(chatId) },
           {
@@ -81,34 +99,70 @@ const deleteMessageRoute = {
         )
       }
 
-      // Get chat to broadcast to participants
-      const chat = await chats.findOne({ _id: new ObjectId(chatId) })
-
+      // Send response first
       res.json({
         success: true,
         message: 'Message deleted successfully',
       })
 
-      // ✅ Broadcast via WebSocket
-      if (chat && global.wsClients) {
-        console.log(`📡 Broadcasting message deletion to chat ${chatId}`)
-
-        chat.participants.forEach((participantId) => {
-          const client = global.wsClients.get(participantId)
-          if (client && client.ws.readyState === 1) {
-            // 1 = OPEN
-            client.ws.send(
-              JSON.stringify({
-                type: 'message-deleted',
-                chatId,
-                messageId,
-                timestamp: new Date().toISOString(),
-              })
-            )
-            console.log(`✉️ Sent deletion notification to ${participantId}`)
-          }
-        })
+      // ✅ BROADCAST VIA WEBSOCKET
+      if (!global.wsClients) {
+        console.error('❌ global.wsClients is not initialized!')
+        return
       }
+
+      if (!chat.participants || chat.participants.length === 0) {
+        console.error('❌ Chat has no participants!')
+        return
+      }
+
+      console.log(
+        `📡 Broadcasting message deletion to ${chat.participants.length} participants`
+      )
+
+      const broadcastPayload = {
+        type: 'message-deleted',
+        chatId,
+        messageId,
+        senderId: req.user.uid,
+        timestamp: new Date().toISOString(),
+      }
+
+      let sentCount = 0
+      let failedCount = 0
+
+      chat.participants.forEach((participantId) => {
+        const client = global.wsClients.get(participantId)
+
+        console.log(`  📤 Attempting to send to ${participantId}:`, {
+          clientExists: !!client,
+          wsExists: !!client?.ws,
+          readyState: client?.ws?.readyState,
+        })
+
+        if (client && client.ws && client.ws.readyState === 1) {
+          try {
+            client.ws.send(JSON.stringify(broadcastPayload))
+            sentCount++
+            console.log(`  ✅ Deletion sent to ${participantId}`)
+          } catch (sendError) {
+            failedCount++
+            console.error(
+              `  ❌ Failed to send to ${participantId}:`,
+              sendError.message
+            )
+          }
+        } else {
+          failedCount++
+          console.warn(
+            `  ⚠️ Client ${participantId} not connected or socket not ready`
+          )
+        }
+      })
+
+      console.log(
+        `📊 Broadcast complete: ${sentCount} sent, ${failedCount} failed`
+      )
     } catch (err) {
       console.error('❌ Error deleting message:', err)
       res.status(500).json({
@@ -119,5 +173,4 @@ const deleteMessageRoute = {
     }
   },
 }
-
 module.exports = { deleteMessageRoute }

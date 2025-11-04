@@ -29,6 +29,10 @@ const server = http.createServer(app)
 // Setup signaling server and get client reference
 const wsClients = setupSignalingServer(server)
 
+global.wsClients = wsClients // Make it globally accessible
+
+console.log('✅ Global wsClients initialized:', !!global.wsClients)
+
 // Pass WebSocket clients to call routes
 if (wsClients) {
   setWebSocketClients(wsClients)

@@ -18,7 +18,6 @@ const updateMessageRoute = {
       const messageId = req.params.messageId
       const { content } = req.body
 
-      // Validate ObjectId
       if (!ObjectId.isValid(messageId)) {
         return res.status(400).json({
           success: false,
@@ -26,7 +25,6 @@ const updateMessageRoute = {
         })
       }
 
-      // Validate content
       if (!content || typeof content !== 'string' || !content.trim()) {
         return res.status(400).json({
           success: false,
@@ -34,7 +32,6 @@ const updateMessageRoute = {
         })
       }
 
-      // Get message details (from middleware)
       const message = req.message
       if (!message) {
         return res.status(404).json({
@@ -43,7 +40,6 @@ const updateMessageRoute = {
         })
       }
 
-      // Check if message is text type (can't edit media messages)
       if (message.type !== 'text') {
         return res.status(400).json({
           success: false,
@@ -54,6 +50,27 @@ const updateMessageRoute = {
       const chatId = message.chatId.toString()
       const trimmedContent = content.trim()
       const now = new Date()
+
+      // ✅ Get chat BEFORE updating (for participants)
+      const chat = await chats.findOne({ _id: new ObjectId(chatId) })
+
+      // ✅ ADD DEBUG LOGGING
+      console.log('📊 Debug Info:')
+      console.log('  - Chat found:', !!chat)
+      console.log('  - Chat participants:', chat?.participants)
+      console.log('  - global.wsClients exists:', !!global.wsClients)
+      console.log('  - wsClients size:', global.wsClients?.size)
+
+      if (chat && global.wsClients) {
+        console.log('  - Connected users:', Array.from(global.wsClients.keys()))
+      }
+
+      if (!chat) {
+        return res.status(404).json({
+          success: false,
+          error: 'Chat not found',
+        })
+      }
 
       // Update the message
       const updateResult = await messages.updateOne(
@@ -76,7 +93,6 @@ const updateMessageRoute = {
 
       console.log(`✅ Message updated successfully: ${messageId}`)
 
-      // Get the updated message
       const updatedMessage = await messages.findOne({
         _id: new ObjectId(messageId),
       })
@@ -99,9 +115,6 @@ const updateMessageRoute = {
         )
       }
 
-      // Get chat to get participants
-      const chat = await chats.findOne({ _id: new ObjectId(chatId) })
-
       // Send response first
       res.json({
         success: true,
@@ -117,37 +130,73 @@ const updateMessageRoute = {
         },
       })
 
-      // ✅ Broadcast via WebSocket using signaling server pattern
-      if (chat && global.wsClients) {
-        console.log(`📡 Broadcasting message update to chat ${chatId}`)
-
-        // Send to each participant directly
-        chat.participants.forEach((participantId) => {
-          const client = global.wsClients.get(participantId)
-          if (client && client.ws.readyState === 1) {
-            // 1 = OPEN
-            client.ws.send(
-              JSON.stringify({
-                type: 'message-updated',
-                chatId,
-                messageId,
-                message: {
-                  _id: updatedMessage._id,
-                  content: updatedMessage.content,
-                  updatedAt: updatedMessage.updatedAt,
-                  chatId: updatedMessage.chatId,
-                  senderId: updatedMessage.senderId,
-                  type: updatedMessage.type,
-                  createdAt: updatedMessage.createdAt,
-                },
-                senderId: req.user.uid,
-                timestamp: new Date().toISOString(),
-              })
-            )
-            console.log(`✉️ Sent update notification to ${participantId}`)
-          }
-        })
+      // ✅ BROADCAST VIA WEBSOCKET
+      if (!global.wsClients) {
+        console.error('❌ global.wsClients is not initialized!')
+        return
       }
+
+      if (!chat.participants || chat.participants.length === 0) {
+        console.error('❌ Chat has no participants!')
+        return
+      }
+
+      console.log(
+        `📡 Broadcasting message update to ${chat.participants.length} participants`
+      )
+
+      const broadcastPayload = {
+        type: 'message-updated',
+        chatId,
+        messageId,
+        message: {
+          _id: updatedMessage._id,
+          content: updatedMessage.content,
+          updatedAt: updatedMessage.updatedAt,
+          chatId: updatedMessage.chatId,
+          senderId: updatedMessage.senderId,
+          type: updatedMessage.type,
+          createdAt: updatedMessage.createdAt,
+        },
+        senderId: req.user.uid,
+        timestamp: new Date().toISOString(),
+      }
+
+      let sentCount = 0
+      let failedCount = 0
+
+      chat.participants.forEach((participantId) => {
+        const client = global.wsClients.get(participantId)
+
+        console.log(`  📤 Attempting to send to ${participantId}:`, {
+          clientExists: !!client,
+          wsExists: !!client?.ws,
+          readyState: client?.ws?.readyState,
+        })
+
+        if (client && client.ws && client.ws.readyState === 1) {
+          try {
+            client.ws.send(JSON.stringify(broadcastPayload))
+            sentCount++
+            console.log(`  ✅ Update sent to ${participantId}`)
+          } catch (sendError) {
+            failedCount++
+            console.error(
+              `  ❌ Failed to send to ${participantId}:`,
+              sendError.message
+            )
+          }
+        } else {
+          failedCount++
+          console.warn(
+            `  ⚠️ Client ${participantId} not connected or socket not ready`
+          )
+        }
+      })
+
+      console.log(
+        `📊 Broadcast complete: ${sentCount} sent, ${failedCount} failed`
+      )
     } catch (err) {
       console.error('❌ Error updating message:', err)
       res.status(500).json({
