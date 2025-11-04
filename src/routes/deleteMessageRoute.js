@@ -24,7 +24,7 @@ const deleteMessageRoute = {
         })
       }
 
-      // Get message details before deletion (from middleware)
+      // Get message details (from middleware)
       const message = req.message
       if (!message) {
         return res.status(404).json({
@@ -50,51 +50,65 @@ const deleteMessageRoute = {
 
       console.log(`✅ Message deleted successfully: ${messageId}`)
 
-      // Update chat's lastMessage to the most recent message
+      // Update chat's lastMessage if this was the most recent message
       const latestMessage = await messages.findOne(
         { chatId: new ObjectId(chatId) },
         { sort: { createdAt: -1 } }
       )
 
-      const updateData = {
-        lastActivity: new Date(),
-      }
-
       if (latestMessage) {
-        updateData.lastMessage = latestMessage.content
-          ? latestMessage.content.substring(0, 50)
-          : 'Media message'
-      } else {
-        updateData.lastMessage = 'No messages'
-      }
-
-      await chats.updateOne({ _id: new ObjectId(chatId) }, { $set: updateData })
-
-      const chat = await chats.findOne({ _id: new ObjectId(chatId) })
-      if (chat && global.wsConnections) {
-        const participants = chat.participants.filter((p) => p !== req.user.uid)
-
-        // Notify via WebSocket if available
-        participants.forEach((participantId) => {
-          const connection = global.wsConnections.get(participantId)
-          if (connection && connection.readyState === 1) {
-            // 1 = OPEN
-            connection.send(
-              JSON.stringify({
-                type: 'message_deleted',
-                chatId,
-                messageId,
-              })
-            )
+        await chats.updateOne(
+          { _id: new ObjectId(chatId) },
+          {
+            $set: {
+              lastMessage: latestMessage.content
+                ? latestMessage.content.substring(0, 50)
+                : 'Sent an attachment',
+              lastActivity: latestMessage.createdAt,
+            },
           }
-        })
+        )
+      } else {
+        // No messages left in chat
+        await chats.updateOne(
+          { _id: new ObjectId(chatId) },
+          {
+            $set: {
+              lastMessage: '',
+              lastActivity: new Date(),
+            },
+          }
+        )
       }
+
+      // Get chat to broadcast to participants
+      const chat = await chats.findOne({ _id: new ObjectId(chatId) })
 
       res.json({
         success: true,
         message: 'Message deleted successfully',
-        deletedMessageId: messageId,
       })
+
+      // ✅ Broadcast via WebSocket
+      if (chat && global.wsClients) {
+        console.log(`📡 Broadcasting message deletion to chat ${chatId}`)
+
+        chat.participants.forEach((participantId) => {
+          const client = global.wsClients.get(participantId)
+          if (client && client.ws.readyState === 1) {
+            // 1 = OPEN
+            client.ws.send(
+              JSON.stringify({
+                type: 'message-deleted',
+                chatId,
+                messageId,
+                timestamp: new Date().toISOString(),
+              })
+            )
+            console.log(`✉️ Sent deletion notification to ${participantId}`)
+          }
+        })
+      }
     } catch (err) {
       console.error('❌ Error deleting message:', err)
       res.status(500).json({

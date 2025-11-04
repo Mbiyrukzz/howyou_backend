@@ -204,7 +204,13 @@ function setupSignalingServer(server) {
       case 'new-message':
         handleNewMessage(senderId, data)
         break
+      case 'message-updated':
+        handleMessageUpdated(senderId, data)
+        break
 
+      case 'message-deleted':
+        handleMessageDeleted(senderId, data)
+        break
       case 'message-delivered':
         handleMessageDelivered(senderId, data)
         break
@@ -323,6 +329,41 @@ function setupSignalingServer(server) {
       chatId,
       readBy: userId,
       timestamp: new Date().toISOString(),
+    })
+  }
+
+  function handleMessageUpdated(senderId, data) {
+    const { chatId, messageId, message, participants } = data
+
+    console.log(`✏️ Message updated in chat ${chatId} by ${senderId}`)
+
+    // Broadcast to all chat participants
+    participants.forEach((participantId) => {
+      forwardToUser(participantId, {
+        type: 'message-updated',
+        chatId,
+        messageId,
+        message,
+        senderId,
+        timestamp: new Date().toISOString(),
+      })
+    })
+  }
+
+  function handleMessageDeleted(senderId, data) {
+    const { chatId, messageId, participants } = data
+
+    console.log(`🗑️ Message deleted in chat ${chatId} by ${senderId}`)
+
+    // Broadcast to all chat participants
+    participants.forEach((participantId) => {
+      forwardToUser(participantId, {
+        type: 'message-deleted',
+        chatId,
+        messageId,
+        senderId,
+        timestamp: new Date().toISOString(),
+      })
     })
   }
 

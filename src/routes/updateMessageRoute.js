@@ -53,6 +53,7 @@ const updateMessageRoute = {
 
       const chatId = message.chatId.toString()
       const trimmedContent = content.trim()
+      const now = new Date()
 
       // Update the message
       const updateResult = await messages.updateOne(
@@ -60,7 +61,7 @@ const updateMessageRoute = {
         {
           $set: {
             content: trimmedContent,
-            updatedAt: new Date(),
+            updatedAt: now,
           },
         }
       )
@@ -92,34 +93,16 @@ const updateMessageRoute = {
           {
             $set: {
               lastMessage: trimmedContent.substring(0, 50),
-              lastActivity: new Date(),
+              lastActivity: now,
             },
           }
         )
       }
 
-      // Optional: WebSocket notification for real-time updates
+      // Get chat to get participants
       const chat = await chats.findOne({ _id: new ObjectId(chatId) })
-      if (chat && global.wsConnections) {
-        const participants = chat.participants.filter((p) => p !== req.user.uid)
 
-        // Notify via WebSocket if available
-        participants.forEach((participantId) => {
-          const connection = global.wsConnections.get(participantId)
-          if (connection && connection.readyState === 1) {
-            // 1 = OPEN
-            connection.send(
-              JSON.stringify({
-                type: 'message_updated',
-                chatId,
-                messageId,
-                content: trimmedContent,
-              })
-            )
-          }
-        })
-      }
-
+      // Send response first
       res.json({
         success: true,
         message: 'Message updated successfully',
@@ -133,6 +116,38 @@ const updateMessageRoute = {
           createdAt: updatedMessage.createdAt,
         },
       })
+
+      // ✅ Broadcast via WebSocket using signaling server pattern
+      if (chat && global.wsClients) {
+        console.log(`📡 Broadcasting message update to chat ${chatId}`)
+
+        // Send to each participant directly
+        chat.participants.forEach((participantId) => {
+          const client = global.wsClients.get(participantId)
+          if (client && client.ws.readyState === 1) {
+            // 1 = OPEN
+            client.ws.send(
+              JSON.stringify({
+                type: 'message-updated',
+                chatId,
+                messageId,
+                message: {
+                  _id: updatedMessage._id,
+                  content: updatedMessage.content,
+                  updatedAt: updatedMessage.updatedAt,
+                  chatId: updatedMessage.chatId,
+                  senderId: updatedMessage.senderId,
+                  type: updatedMessage.type,
+                  createdAt: updatedMessage.createdAt,
+                },
+                senderId: req.user.uid,
+                timestamp: new Date().toISOString(),
+              })
+            )
+            console.log(`✉️ Sent update notification to ${participantId}`)
+          }
+        })
+      }
     } catch (err) {
       console.error('❌ Error updating message:', err)
       res.status(500).json({
