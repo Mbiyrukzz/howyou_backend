@@ -1,13 +1,15 @@
 const { getCollections } = require('../db')
 const { ObjectId } = require('mongodb')
-const { userOwnMessage } = require('../middleware/userOwnMessage')
+
 const { verifyAuthToken } = require('../middleware/verifyAuthToken')
+const { userOwnMessage } = require('../middleware/userOwnMessage')
 
 const deleteMessageRoute = {
   path: '/delete-message/:messageId',
   method: 'delete',
   middleware: [verifyAuthToken, userOwnMessage],
   handler: async (req, res) => {
+    console.log('userOwnMessage middleware LOADED')
     console.log('=== Delete Message Request ===')
     console.log('Message ID:', req.params.messageId)
     console.log('Current user:', req.user.uid)

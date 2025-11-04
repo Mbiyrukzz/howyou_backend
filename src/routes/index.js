@@ -14,7 +14,7 @@ const {
 const { sendMessageRoute } = require('./sendMessageRoute')
 const { savePushTokenRoute, getPushTokenRoute } = require('./pushNotifications')
 const { deleteChatRoute } = require('./deleteChatRoutes')
-const { deleteMessageRoute } = require('./deleteMessageRoute')
+
 const { updateMessageRoute } = require('./updateMessageRoute')
 const {
   markMessagesAsReadRoute,
@@ -35,6 +35,7 @@ const {
 } = require('./createPostRoute')
 const { getMyStatusRoute } = require('./getMyStatusRoute')
 const { updateLastSeenRoute } = require('./updateLastSeen')
+const { deleteMessageRoute } = require('./deleteMessageRoute')
 
 const routes = [
   createUserRoute,
@@ -44,8 +45,8 @@ const routes = [
   sendMessageRoute,
   listChatsRoute,
   listMessagesRoute,
-  deleteMessageRoute,
   updateMessageRoute,
+  deleteMessageRoute,
 
   markMessagesAsReadRoute,
   markMessagesAsDeliveredRoute,
