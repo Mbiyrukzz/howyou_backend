@@ -11,7 +11,7 @@ const updateLastSeenRoute = {
       const { chatId } = req.params
       const userId = req.user.uid
 
-      const { chats } = getCollections()
+      const { chats, users } = getCollections()
 
       // Verify user has access to this chat
       const chat = await chats.findOne({
@@ -26,19 +26,34 @@ const updateLastSeenRoute = {
         })
       }
 
-      // Update last seen
-      await chats.updateOne(
-        { _id: new ObjectId(chatId) },
+      const now = new Date()
+
+      // ✅ Update in users collection (global last seen)
+      await users.updateOne(
+        { firebaseUid: userId },
         {
           $set: {
-            [`lastSeen.${userId}`]: new Date(),
+            lastSeen: now,
+            [`lastSeenPerChat.${chatId}`]: now, // Optional: per-chat tracking
           },
         }
       )
 
+      // Also update in chats collection for backward compatibility
+      await chats.updateOne(
+        { _id: new ObjectId(chatId) },
+        {
+          $set: {
+            [`lastSeen.${userId}`]: now,
+          },
+        }
+      )
+
+      console.log(`👁️ Updated last seen for user ${userId} in chat ${chatId}`)
+
       res.json({
         success: true,
-        timestamp: new Date(),
+        timestamp: now,
       })
     } catch (err) {
       console.error('❌ Error updating last seen:', err)
