@@ -173,9 +173,6 @@ const initiateCallRoute = {
   },
 }
 
-// Answer a call - UPDATED
-// routes/callRoutes.js - Updated answerCallRoute
-
 const answerCallRoute = {
   path: '/answer-call/:callId',
   method: 'post',
@@ -225,8 +222,34 @@ const answerCallRoute = {
 
       if (accepted) {
         updateData.actualStartTime = new Date()
+
+        // ✅ Notify caller that call was accepted
+        const acceptNotificationSent = sendToUser(call.callerId, {
+          type: 'call_accepted',
+          callId: callId,
+          recipientId: req.user.uid,
+          recipientName: recipientName,
+          timestamp: new Date().toISOString(),
+        })
+
+        console.log(
+          `✅ Call accepted notification sent: ${acceptNotificationSent}`
+        )
       } else {
-        // Send missed call notification to caller
+        // ✅ Notify caller that call was rejected
+        const rejectNotificationSent = sendToUser(call.callerId, {
+          type: 'call_rejected',
+          callId: callId,
+          recipientId: req.user.uid,
+          recipientName: recipientName,
+          timestamp: new Date().toISOString(),
+        })
+
+        console.log(
+          `✅ Call rejected notification sent: ${rejectNotificationSent}`
+        )
+
+        // Send missed call notification
         await sendMissedCallNotification(
           call.callerId,
           recipientName,
@@ -235,16 +258,6 @@ const answerCallRoute = {
       }
 
       await calls.updateOne({ _id: new ObjectId(callId) }, { $set: updateData })
-
-      // Notify caller about the response - INCLUDE recipientName
-      const notificationType = accepted ? 'call_accepted' : 'call_rejected'
-      sendToUser(call.callerId, {
-        type: notificationType,
-        callId: callId,
-        recipientId: req.user.uid,
-        recipientName: recipientName, // ← ADDED THIS
-        timestamp: new Date().toISOString(),
-      })
 
       console.log(`✅ Call ${accepted ? 'accepted' : 'declined'}:`, callId)
 
@@ -263,7 +276,6 @@ const answerCallRoute = {
     }
   },
 }
-
 // End a call - UPDATED
 const endCallRoute = {
   path: '/end-call/:callId',
@@ -354,6 +366,92 @@ const endCallRoute = {
   },
 }
 
+const cancelCallRoute = {
+  path: '/cancel-call/:callId',
+  method: 'post',
+  middleware: [verifyAuthToken],
+  handler: async (req, res) => {
+    try {
+      const { callId } = req.params
+      const { reason } = req.body // 'timeout' or 'cancelled'
+
+      console.log('⏰ Cancel call request:', {
+        callId,
+        reason,
+        userId: req.user.uid,
+      })
+
+      if (!ObjectId.isValid(callId)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid callId format',
+        })
+      }
+
+      const { calls, users } = getCollections()
+
+      const call = await calls.findOne({
+        _id: new ObjectId(callId),
+        callerId: req.user.uid, // Only caller can cancel
+        status: 'initiated',
+      })
+
+      if (!call) {
+        return res.status(404).json({
+          success: false,
+          error: 'Call not found or already answered',
+        })
+      }
+
+      const updateData = {
+        status: reason === 'timeout' ? 'missed' : 'cancelled',
+        endTime: new Date(),
+        duration: 0,
+      }
+
+      await calls.updateOne({ _id: new ObjectId(callId) }, { $set: updateData })
+
+      // Get caller info
+      const caller = await users.findOne({ firebaseUid: req.user.uid })
+      const callerName =
+        caller?.name || req.user.displayName || req.user.email || 'Unknown'
+
+      // Notify recipient that call ended
+      sendToUser(call.recipientId, {
+        type: 'call-ended',
+        callId: callId,
+        reason: reason,
+        callerName: callerName,
+        timestamp: new Date().toISOString(),
+      })
+
+      // Send missed call notification
+      if (reason === 'timeout') {
+        await sendMissedCallNotification(
+          call.recipientId,
+          callerName,
+          call.callType
+        )
+      }
+
+      console.log(`✅ Call ${reason}:`, callId)
+
+      res.json({
+        success: true,
+        call: { ...call, ...updateData },
+        message: `Call ${reason}`,
+      })
+    } catch (err) {
+      console.error('❌ Error cancelling call:', err)
+      res.status(500).json({
+        success: false,
+        error: 'Failed to cancel call',
+        details: err.message,
+      })
+    }
+  },
+}
+
 // Get call history (unchanged)
 const getCallHistoryRoute = {
   path: '/call-history/:chatId',
@@ -410,6 +508,7 @@ module.exports = {
   initiateCallRoute,
   answerCallRoute,
   endCallRoute,
+  cancelCallRoute,
   getCallHistoryRoute,
   setWebSocketClients,
 }

@@ -10,6 +10,7 @@ const {
   answerCallRoute,
   endCallRoute,
   getCallHistoryRoute,
+  cancelCallRoute,
 } = require('./initiateCallRoute')
 const { sendMessageRoute } = require('./sendMessageRoute')
 const { savePushTokenRoute, getPushTokenRoute } = require('./pushNotifications')
@@ -70,6 +71,7 @@ const routes = [
   initiateCallRoute,
   answerCallRoute,
   endCallRoute,
+  cancelCallRoute,
   getCallHistoryRoute,
 
   savePushTokenRoute,

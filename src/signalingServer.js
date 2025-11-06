@@ -268,24 +268,54 @@ function setupSignalingServer(server) {
     })
   }
 
-  function handleEndCall(userId, data) {
-    const { chatId } = data
+  // In signalingServer.js, update the handleEndCall function:
 
-    broadcastToRoom(chatId, null, {
-      type: 'call-ended',
-      userId,
-      chatId,
+  function handleEndCall(userId, data) {
+    const { chatId, remoteUserId, reason } = data
+
+    console.log(`🔴 User ${userId} ending call in room: ${chatId}`, {
+      reason,
+      remoteUserId,
     })
 
+    // ✅ Determine the correct message type based on reason
+    const messageType =
+      reason === 'timeout' || reason === 'rejected'
+        ? 'call-ended'
+        : 'call-ended'
+
+    // ✅ Notify the specific remote user (important for unanswered calls)
+    if (remoteUserId) {
+      forwardToUser(remoteUserId, {
+        type: messageType,
+        userId,
+        chatId,
+        reason: reason || 'user_ended',
+        timestamp: new Date().toISOString(),
+      })
+      console.log(`✅ Sent call-ended to specific user: ${remoteUserId}`)
+    }
+
+    // Also broadcast to the entire call room (for ongoing calls)
+    broadcastToRoom(chatId, userId, {
+      type: messageType,
+      userId,
+      chatId,
+      reason: reason || 'user_ended',
+      timestamp: new Date().toISOString(),
+    })
+
+    // Clean up call room
     if (callRooms.has(chatId)) {
       callRooms.get(chatId).delete(userId)
 
       if (callRooms.get(chatId).size === 0) {
         callRooms.delete(chatId)
+        console.log(`🧹 Call room ${chatId} cleaned up`)
       }
     }
 
-    console.log(`🔴 User ${userId} ended call in room: ${chatId}`)
+    console.log(`✅ Call ended notification sent for room: ${chatId}`)
   }
 
   // ===== MESSAGE HANDLERS =====
