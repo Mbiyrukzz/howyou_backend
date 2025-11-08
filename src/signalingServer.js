@@ -1,11 +1,33 @@
+// signalingServer.js - Fixed to support multiple connections per user
 const { WebSocketServer } = require('ws')
 const url = require('url')
 
 function setupSignalingServer(server) {
   const wss = new WebSocketServer({ noServer: true })
-  const clients = new Map() // Map<userId, {ws, metadata}>
+
+  // NEW: Separate connection maps per endpoint to avoid conflicts
+  const notificationClients = new Map() // Map<userId, {ws, metadata}>
+  const postsClients = new Map() // Map<userId, {ws, metadata}>
+  const signalingClients = new Map() // Map<userId, {ws, metadata}>
+
   const callRooms = new Map() // Map<chatId, Set<userId>>
   const typingUsers = new Map() // Map<chatId, Map<userId, timeoutId>>
+
+  // Helper to get the correct client map for an endpoint
+  function getClientMap(endpoint) {
+    if (endpoint === '/posts') return postsClients
+    if (endpoint === '/signaling') return signalingClients
+    return notificationClients // default for /notifications and /
+  }
+
+  // Helper to get all online users across all endpoints
+  function getAllOnlineUsers() {
+    const users = new Set()
+    notificationClients.forEach((_, userId) => users.add(userId))
+    postsClients.forEach((_, userId) => users.add(userId))
+    signalingClients.forEach((_, userId) => users.add(userId))
+    return Array.from(users)
+  }
 
   // Handle WebSocket upgrade
   server.on('upgrade', (request, socket, head) => {
@@ -16,7 +38,8 @@ function setupSignalingServer(server) {
     if (
       pathname === '/' ||
       pathname === '/notifications' ||
-      pathname === '/signaling'
+      pathname === '/signaling' ||
+      pathname === '/posts'
     ) {
       wss.handleUpgrade(request, socket, head, (ws) => {
         wss.emit('connection', ws, request)
@@ -40,16 +63,36 @@ function setupSignalingServer(server) {
       return
     }
 
-    // Store connection with metadata
+    // Get the appropriate client map for this endpoint
+    const clients = getClientMap(pathname)
+
+    // Close existing connection for this user on THIS endpoint if any
+    const existingClient = clients.get(userId)
+    if (
+      existingClient &&
+      existingClient.ws.readyState === existingClient.ws.OPEN
+    ) {
+      console.log(
+        `⚠️ Closing existing connection for user: ${userId} on ${pathname}`
+      )
+      existingClient.ws.close(1000, 'New connection established')
+    }
+
+    // Store connection with metadata in the correct map
     clients.set(userId, {
       ws,
       userId,
       chatId,
+      pathname,
       online: true,
       lastActivity: Date.now(),
+      connectedAt: Date.now(),
     })
 
     console.log(`✅ User connected: ${userId} on ${pathname}`)
+    console.log(
+      `📊 Connections - Notifications: ${notificationClients.size}, Posts: ${postsClients.size}, Signaling: ${signalingClients.size}`
+    )
 
     // If chatId provided, add to call room
     if (chatId) {
@@ -66,12 +109,14 @@ function setupSignalingServer(server) {
       })
     }
 
-    // Broadcast online status to all users
-    broadcastToAll({
+    // Broadcast online status to all users on ALL endpoints
+    const onlineMessage = {
       type: 'user-online',
       userId,
       timestamp: new Date().toISOString(),
-    })
+    }
+    broadcastToEndpoint('/notifications', onlineMessage)
+    broadcastToEndpoint('/posts', onlineMessage)
 
     // Send connection confirmation
     ws.send(
@@ -79,7 +124,8 @@ function setupSignalingServer(server) {
         type: 'connected',
         userId,
         timestamp: new Date().toISOString(),
-        onlineUsers: Array.from(clients.keys()),
+        onlineUsers: getAllOnlineUsers(),
+        endpoint: pathname,
       })
     )
 
@@ -87,7 +133,7 @@ function setupSignalingServer(server) {
     ws.on('message', (message) => {
       try {
         const data = JSON.parse(message)
-        handleSignalMessage(userId, data)
+        handleSignalMessage(userId, pathname, data)
       } catch (err) {
         console.error('❌ Invalid message format:', err)
         ws.send(
@@ -102,13 +148,26 @@ function setupSignalingServer(server) {
     // Handle disconnection
     ws.on('close', () => {
       clients.delete(userId)
+      console.log(`❌ User disconnected: ${userId} from ${pathname}`)
+      console.log(
+        `📊 Connections - Notifications: ${notificationClients.size}, Posts: ${postsClients.size}, Signaling: ${signalingClients.size}`
+      )
 
-      // Broadcast offline status
-      broadcastToAll({
-        type: 'user-offline',
-        userId,
-        timestamp: new Date().toISOString(),
-      })
+      // Only broadcast offline if user is not connected on ANY endpoint
+      const stillConnected =
+        notificationClients.has(userId) ||
+        postsClients.has(userId) ||
+        signalingClients.has(userId)
+
+      if (!stillConnected) {
+        const offlineMessage = {
+          type: 'user-offline',
+          userId,
+          timestamp: new Date().toISOString(),
+        }
+        broadcastToEndpoint('/notifications', offlineMessage)
+        broadcastToEndpoint('/posts', offlineMessage)
+      }
 
       // Clear typing indicators
       typingUsers.forEach((chatTyping, chatId) => {
@@ -117,7 +176,6 @@ function setupSignalingServer(server) {
           clearTimeout(timeoutId)
           chatTyping.delete(userId)
 
-          // Notify others in chat
           broadcastToChatMembers(chatId, userId, {
             type: 'typing-stopped',
             userId,
@@ -141,8 +199,6 @@ function setupSignalingServer(server) {
           }
         }
       })
-
-      console.log(`❌ User disconnected: ${userId}`)
     })
 
     ws.on('error', (error) => {
@@ -151,8 +207,18 @@ function setupSignalingServer(server) {
   })
 
   // Handle signaling messages
-  function handleSignalMessage(senderId, data) {
-    console.log(`📨 Message from ${senderId}:`, data.type)
+  function handleSignalMessage(senderId, endpoint, data) {
+    console.log(`📨 Message from ${senderId} on ${endpoint}:`, data.type)
+    console.log(`📦 Message data:`, JSON.stringify(data, null, 2))
+
+    // Update last activity on the correct client map
+    const clients = getClientMap(endpoint)
+    const client = clients.get(senderId)
+    if (client) {
+      client.lastActivity = Date.now()
+    } else {
+      console.warn(`⚠️ Client ${senderId} not found in ${endpoint} map!`)
+    }
 
     switch (data.type) {
       // ===== CALL SIGNALING =====
@@ -161,49 +227,99 @@ function setupSignalingServer(server) {
         break
 
       case 'webrtc-offer':
-        forwardToUser(data.to, {
-          type: 'webrtc-offer',
-          offer: data.offer,
-          from: senderId,
-          chatId: data.chatId,
-        })
+        forwardToUser(
+          data.to,
+          {
+            type: 'webrtc-offer',
+            offer: data.offer,
+            from: senderId,
+            chatId: data.chatId,
+          },
+          '/signaling'
+        )
         break
 
       case 'webrtc-answer':
-        forwardToUser(data.to, {
-          type: 'webrtc-answer',
-          answer: data.answer,
-          from: senderId,
-          chatId: data.chatId,
-        })
+        forwardToUser(
+          data.to,
+          {
+            type: 'webrtc-answer',
+            answer: data.answer,
+            from: senderId,
+            chatId: data.chatId,
+          },
+          '/signaling'
+        )
         break
 
       case 'webrtc-ice-candidate':
-        forwardToUser(data.to, {
-          type: 'webrtc-ice-candidate',
-          candidate: data.candidate,
-          from: senderId,
-          chatId: data.chatId,
-        })
+        forwardToUser(
+          data.to,
+          {
+            type: 'webrtc-ice-candidate',
+            candidate: data.candidate,
+            from: senderId,
+            chatId: data.chatId,
+          },
+          '/signaling'
+        )
         break
 
       case 'screen-sharing':
-        forwardToUser(data.to, {
-          type: 'screen-sharing',
-          enabled: data.enabled,
-          from: senderId,
-          chatId: data.chatId,
-        })
+        forwardToUser(
+          data.to,
+          {
+            type: 'screen-sharing',
+            enabled: data.enabled,
+            from: senderId,
+            chatId: data.chatId,
+          },
+          '/signaling'
+        )
         break
 
-      case 'end-call':
-        handleEndCall(senderId, data)
+      case 'call-answered':
+      case 'call_accepted':
+        console.log('📞 Call answered/accepted')
+
+        // Send to caller (initiator)
+        if (data.to) {
+          forwardToUser(
+            data.to,
+            {
+              type: 'call-accepted',
+              from: data.from || senderId,
+              chatId: data.chatId,
+              timestamp: new Date().toISOString(),
+            },
+            '/signaling'
+          )
+          console.log(`✅ Notified caller ${data.to} that call was accepted`)
+        }
+
+        // ✅ NEW: Also confirm to the answerer
+        forwardToUser(
+          senderId,
+          {
+            type: 'call-accepted-confirmed',
+            from: senderId,
+            to: data.to,
+            chatId: data.chatId,
+            timestamp: new Date().toISOString(),
+          },
+          '/signaling'
+        )
+        console.log(
+          `✅ Confirmed to answerer ${senderId} to proceed with WebRTC`
+        )
+
         break
 
       // ===== MESSAGING =====
       case 'new-message':
         handleNewMessage(senderId, data)
         break
+
       case 'message-updated':
         handleMessageUpdated(senderId, data)
         break
@@ -211,12 +327,42 @@ function setupSignalingServer(server) {
       case 'message-deleted':
         handleMessageDeleted(senderId, data)
         break
+
       case 'message-delivered':
         handleMessageDelivered(senderId, data)
         break
 
       case 'message-read':
         handleMessageRead(senderId, data)
+        break
+
+      // ===== POSTS & STATUSES =====
+      case 'new-post':
+        handleNewPost(senderId, data)
+        break
+
+      case 'post-updated':
+        handlePostUpdated(senderId, data)
+        break
+
+      case 'post-deleted':
+        handlePostDeleted(senderId, data)
+        break
+
+      case 'post-liked':
+        handlePostLiked(senderId, data)
+        break
+
+      case 'post-unliked':
+        handlePostUnliked(senderId, data)
+        break
+
+      case 'new-status':
+        handleNewStatus(senderId, data)
+        break
+
+      case 'status-deleted':
+        handleStatusDeleted(senderId, data)
         break
 
       // ===== TYPING INDICATORS =====
@@ -268,8 +414,6 @@ function setupSignalingServer(server) {
     })
   }
 
-  // In signalingServer.js, update the handleEndCall function:
-
   function handleEndCall(userId, data) {
     const { chatId, remoteUserId, reason } = data
 
@@ -278,25 +422,23 @@ function setupSignalingServer(server) {
       remoteUserId,
     })
 
-    // ✅ Determine the correct message type based on reason
-    const messageType =
-      reason === 'timeout' || reason === 'rejected'
-        ? 'call-ended'
-        : 'call-ended'
+    const messageType = 'call-ended'
 
-    // ✅ Notify the specific remote user (important for unanswered calls)
     if (remoteUserId) {
-      forwardToUser(remoteUserId, {
-        type: messageType,
-        userId,
-        chatId,
-        reason: reason || 'user_ended',
-        timestamp: new Date().toISOString(),
-      })
+      forwardToUser(
+        remoteUserId,
+        {
+          type: messageType,
+          userId,
+          chatId,
+          reason: reason || 'user_ended',
+          timestamp: new Date().toISOString(),
+        },
+        '/notifications'
+      )
       console.log(`✅ Sent call-ended to specific user: ${remoteUserId}`)
     }
 
-    // Also broadcast to the entire call room (for ongoing calls)
     broadcastToRoom(chatId, userId, {
       type: messageType,
       userId,
@@ -305,7 +447,6 @@ function setupSignalingServer(server) {
       timestamp: new Date().toISOString(),
     })
 
-    // Clean up call room
     if (callRooms.has(chatId)) {
       callRooms.get(chatId).delete(userId)
 
@@ -318,48 +459,108 @@ function setupSignalingServer(server) {
     console.log(`✅ Call ended notification sent for room: ${chatId}`)
   }
 
-  // ===== MESSAGE HANDLERS =====
+  // ===== MESSAGE HANDLERS (sent to /notifications clients) =====
   function handleNewMessage(senderId, data) {
     const { chatId, message, participants } = data
 
     console.log(`💬 New message in chat ${chatId} from ${senderId}`)
+    console.log(`👥 Participants:`, participants)
+    console.log(`📊 Total notification clients:`, notificationClients.size)
+    console.log(
+      `📋 Notification clients list:`,
+      Array.from(notificationClients.keys())
+    )
 
-    // Broadcast to all chat participants (including sender for sync)
+    if (!participants || !Array.isArray(participants)) {
+      console.error('❌ Invalid participants list:', participants)
+      return
+    }
+
+    // Send to all participants EXCEPT the sender on /notifications endpoint
+    let sentCount = 0
+    let skippedSender = false
+
     participants.forEach((participantId) => {
-      forwardToUser(participantId, {
-        type: 'new-message',
-        chatId,
-        message,
-        senderId,
-        timestamp: new Date().toISOString(),
-      })
+      const participantStr = String(participantId)
+      const senderStr = String(senderId)
+
+      console.log(
+        `  Checking participant "${participantStr}" vs sender "${senderStr}"`
+      )
+
+      if (participantStr === senderStr) {
+        console.log(`  ⏭️ Skipping sender (exact match)`)
+        skippedSender = true
+        return
+      }
+
+      // Check if client exists on notifications endpoint
+      if (!notificationClients.has(participantStr)) {
+        console.warn(
+          `  ⚠️ Participant ${participantStr} not connected to /notifications`
+        )
+        return
+      }
+
+      const success = forwardToUser(
+        participantStr,
+        {
+          type: 'new-message',
+          chatId,
+          message,
+          senderId,
+          timestamp: new Date().toISOString(),
+        },
+        '/notifications'
+      )
+
+      if (success) {
+        sentCount++
+        console.log(`  ✅ Sent to ${participantStr}`)
+      } else {
+        console.log(`  ❌ Failed to send to ${participantStr}`)
+      }
     })
 
-    // Stop typing indicator for sender
+    console.log(`✅ Message broadcast complete:`)
+    console.log(`   - Total participants: ${participants.length}`)
+    console.log(`   - Sender skipped: ${skippedSender}`)
+    console.log(`   - Successfully sent: ${sentCount}`)
+    console.log(`   - Expected recipients: ${participants.length - 1}`)
+
     handleTypingStop(senderId, { chatId })
   }
+
   function handleMessageDelivered(userId, data) {
     const { messageId, chatId, senderId } = data
 
-    forwardToUser(senderId, {
-      type: 'message-delivered',
-      messageId,
-      chatId,
-      deliveredBy: userId,
-      timestamp: new Date().toISOString(),
-    })
+    forwardToUser(
+      senderId,
+      {
+        type: 'message-delivered',
+        messageId,
+        chatId,
+        deliveredBy: userId,
+        timestamp: new Date().toISOString(),
+      },
+      '/notifications'
+    )
   }
 
   function handleMessageRead(userId, data) {
     const { messageId, chatId, senderId } = data
 
-    forwardToUser(senderId, {
-      type: 'message-read',
-      messageId,
-      chatId,
-      readBy: userId,
-      timestamp: new Date().toISOString(),
-    })
+    forwardToUser(
+      senderId,
+      {
+        type: 'message-read',
+        messageId,
+        chatId,
+        readBy: userId,
+        timestamp: new Date().toISOString(),
+      },
+      '/notifications'
+    )
   }
 
   function handleMessageUpdated(senderId, data) {
@@ -367,16 +568,22 @@ function setupSignalingServer(server) {
 
     console.log(`✏️ Message updated in chat ${chatId} by ${senderId}`)
 
-    // Broadcast to all chat participants
+    // Send to all participants EXCEPT the sender
     participants.forEach((participantId) => {
-      forwardToUser(participantId, {
-        type: 'message-updated',
-        chatId,
-        messageId,
-        message,
-        senderId,
-        timestamp: new Date().toISOString(),
-      })
+      if (participantId !== senderId) {
+        forwardToUser(
+          participantId,
+          {
+            type: 'message-updated',
+            chatId,
+            messageId,
+            message,
+            senderId,
+            timestamp: new Date().toISOString(),
+          },
+          '/notifications'
+        )
+      }
     })
   }
 
@@ -385,16 +592,153 @@ function setupSignalingServer(server) {
 
     console.log(`🗑️ Message deleted in chat ${chatId} by ${senderId}`)
 
-    // Broadcast to all chat participants
+    // Send to all participants EXCEPT the sender
     participants.forEach((participantId) => {
-      forwardToUser(participantId, {
-        type: 'message-deleted',
-        chatId,
-        messageId,
+      if (participantId !== senderId) {
+        forwardToUser(
+          participantId,
+          {
+            type: 'message-deleted',
+            chatId,
+            messageId,
+            senderId,
+            timestamp: new Date().toISOString(),
+          },
+          '/notifications'
+        )
+      }
+    })
+  }
+
+  // ===== POST HANDLERS (sent to /posts clients) =====
+  function handleNewPost(senderId, data) {
+    const { post } = data
+
+    console.log(`📝 Broadcasting new post from ${senderId}:`, post._id)
+    console.log(
+      `📊 Broadcasting to ${postsClients.size - 1} other posts clients`
+    )
+
+    // Broadcast to all /posts clients EXCEPT sender
+    broadcastToEndpoint(
+      '/posts',
+      {
+        type: 'new-post',
+        post,
         senderId,
         timestamp: new Date().toISOString(),
-      })
-    })
+      },
+      senderId
+    )
+  }
+
+  function handlePostUpdated(senderId, data) {
+    const { postId, post } = data
+
+    console.log(`✏️ Broadcasting post update from ${senderId}:`, postId)
+
+    broadcastToEndpoint(
+      '/posts',
+      {
+        type: 'post-updated',
+        postId,
+        post,
+        senderId,
+        timestamp: new Date().toISOString(),
+      },
+      senderId
+    )
+  }
+
+  function handlePostDeleted(senderId, data) {
+    const { postId } = data
+
+    console.log(`🗑️ Broadcasting post deletion from ${senderId}:`, postId)
+
+    broadcastToEndpoint(
+      '/posts',
+      {
+        type: 'post-deleted',
+        postId,
+        senderId,
+        timestamp: new Date().toISOString(),
+      },
+      senderId
+    )
+  }
+
+  function handlePostLiked(senderId, data) {
+    const { postId, newLikeCount } = data
+
+    console.log(`❤️ Broadcasting post like from ${senderId}:`, postId)
+
+    broadcastToEndpoint(
+      '/posts',
+      {
+        type: 'post-liked',
+        postId,
+        userId: senderId,
+        newLikeCount,
+        timestamp: new Date().toISOString(),
+      },
+      senderId
+    )
+  }
+
+  function handlePostUnliked(senderId, data) {
+    const { postId, newLikeCount } = data
+
+    console.log(`💔 Broadcasting post unlike from ${senderId}:`, postId)
+
+    broadcastToEndpoint(
+      '/posts',
+      {
+        type: 'post-unliked',
+        postId,
+        userId: senderId,
+        newLikeCount,
+        timestamp: new Date().toISOString(),
+      },
+      senderId
+    )
+  }
+
+  function handleNewStatus(senderId, data) {
+    const { status } = data
+
+    console.log(`📸 Broadcasting new status from ${senderId}:`, status._id)
+    console.log(
+      `📊 Broadcasting to ${postsClients.size - 1} other posts clients`
+    )
+
+    // Broadcast to all /posts clients EXCEPT sender
+    broadcastToEndpoint(
+      '/posts',
+      {
+        type: 'new-status',
+        status,
+        userId: senderId,
+        timestamp: new Date().toISOString(),
+      },
+      senderId
+    )
+  }
+
+  function handleStatusDeleted(senderId, data) {
+    const { statusId } = data
+
+    console.log(`🗑️ Broadcasting status deletion from ${senderId}:`, statusId)
+
+    broadcastToEndpoint(
+      '/posts',
+      {
+        type: 'status-deleted',
+        statusId,
+        userId: senderId,
+        timestamp: new Date().toISOString(),
+      },
+      senderId
+    )
   }
 
   // ===== TYPING HANDLERS =====
@@ -407,27 +751,28 @@ function setupSignalingServer(server) {
 
     const chatTyping = typingUsers.get(chatId)
 
-    // Clear existing timeout
     if (chatTyping.has(userId)) {
       clearTimeout(chatTyping.get(userId))
     }
 
-    // Set new timeout (auto-stop after 5 seconds)
     const timeoutId = setTimeout(() => {
       handleTypingStop(userId, { chatId, participants })
     }, 5000)
 
     chatTyping.set(userId, timeoutId)
 
-    // Broadcast to chat participants
     participants.forEach((participantId) => {
       if (participantId !== userId) {
-        forwardToUser(participantId, {
-          type: 'typing',
-          userId,
-          chatId,
-          isTyping: true,
-        })
+        forwardToUser(
+          participantId,
+          {
+            type: 'typing',
+            userId,
+            chatId,
+            isTyping: true,
+          },
+          '/notifications'
+        )
       }
     })
 
@@ -446,16 +791,19 @@ function setupSignalingServer(server) {
       }
     }
 
-    // Broadcast to chat participants
     if (participants) {
       participants.forEach((participantId) => {
         if (participantId !== userId) {
-          forwardToUser(participantId, {
-            type: 'typing',
-            userId,
-            chatId,
-            isTyping: false,
-          })
+          forwardToUser(
+            participantId,
+            {
+              type: 'typing',
+              userId,
+              chatId,
+              isTyping: false,
+            },
+            '/notifications'
+          )
         }
       })
     }
@@ -463,25 +811,27 @@ function setupSignalingServer(server) {
     console.log(`⌨️ User ${userId} stopped typing in chat ${chatId}`)
   }
 
-  // Add this handler function:
   function handleLastSeenUpdate(userId, data) {
     const { chatId, participants } = data
 
-    const client = clients.get(userId)
+    const client = notificationClients.get(userId)
     if (client) {
       client.lastSeen = Date.now()
     }
 
-    // Broadcast to chat participants
     if (participants) {
       participants.forEach((participantId) => {
         if (participantId !== userId) {
-          forwardToUser(participantId, {
-            type: 'user-last-seen',
-            userId,
-            chatId,
-            timestamp: new Date().toISOString(),
-          })
+          forwardToUser(
+            participantId,
+            {
+              type: 'user-last-seen',
+              userId,
+              chatId,
+              timestamp: new Date().toISOString(),
+            },
+            '/notifications'
+          )
         }
       })
     }
@@ -493,61 +843,106 @@ function setupSignalingServer(server) {
   function handleStatusUpdate(userId, data) {
     const { status, customMessage } = data
 
-    const client = clients.get(userId)
+    const client = notificationClients.get(userId)
     if (client) {
       client.status = status
       client.customMessage = customMessage
     }
 
-    broadcastToAll({
+    const message = {
       type: 'user-status-updated',
       userId,
       status,
       customMessage,
       timestamp: new Date().toISOString(),
-    })
+    }
+
+    broadcastToEndpoint('/notifications', message)
+    broadcastToEndpoint('/posts', message)
 
     console.log(`📍 User ${userId} status updated to: ${status}`)
   }
 
   // ===== UTILITY FUNCTIONS =====
-  function forwardToUser(userId, message) {
+  function forwardToUser(userId, message, endpoint = '/notifications') {
+    const clients = getClientMap(endpoint)
     const client = clients.get(userId)
 
-    if (client && client.ws.readyState === client.ws.OPEN) {
-      client.ws.send(JSON.stringify(message))
-      console.log(`✉️ Forwarded message to ${userId}:`, message.type)
-    } else {
-      console.warn(`⚠️ User ${userId} not connected or socket not ready`)
+    if (!client) {
+      console.warn(`⚠️ User ${userId} not found on ${endpoint}`)
+      console.warn(
+        `   Available users on ${endpoint}:`,
+        Array.from(clients.keys())
+      )
+      return false
     }
+
+    if (client.ws.readyState !== client.ws.OPEN) {
+      console.warn(
+        `⚠️ User ${userId} socket not ready on ${endpoint} (state: ${client.ws.readyState})`
+      )
+      return false
+    }
+
+    try {
+      client.ws.send(JSON.stringify(message))
+      console.log(`✉️ Forwarded ${message.type} to ${userId} on ${endpoint}`)
+      return true
+    } catch (err) {
+      console.error(
+        `❌ Failed to send to ${userId} on ${endpoint}:`,
+        err.message
+      )
+      return false
+    }
+  }
+
+  function broadcastToEndpoint(endpoint, message, excludeUserId = null) {
+    const clients = getClientMap(endpoint)
+    let broadcastCount = 0
+    let failedCount = 0
+
+    clients.forEach((client, userId) => {
+      if (userId !== excludeUserId && client.ws.readyState === client.ws.OPEN) {
+        try {
+          client.ws.send(JSON.stringify(message))
+          broadcastCount++
+        } catch (err) {
+          console.error(
+            `❌ Broadcast failed to ${userId} on ${endpoint}:`,
+            err.message
+          )
+          failedCount++
+        }
+      }
+    })
+
+    console.log(
+      `📡 ${endpoint} broadcast: ${broadcastCount} sent, ${failedCount} failed${
+        excludeUserId ? ', 1 excluded' : ''
+      }`
+    )
   }
 
   function broadcastToRoom(chatId, excludeUserId, message) {
     const room = callRooms.get(chatId)
 
-    if (!room) return
+    if (!room) {
+      console.warn(`⚠️ Room ${chatId} not found`)
+      return
+    }
 
     room.forEach((userId) => {
       if (userId !== excludeUserId) {
-        forwardToUser(userId, message)
+        forwardToUser(userId, message, '/notifications')
       }
     })
   }
 
   function broadcastToChatMembers(chatId, excludeUserId, message) {
-    // This requires knowing chat participants - you'll need to pass this info
-    // For now, we'll broadcast to all connected users in that chat
-    clients.forEach((client, userId) => {
+    notificationClients.forEach((client, userId) => {
       if (userId !== excludeUserId && client.chatId === chatId) {
-        forwardToUser(userId, message)
-      }
-    })
-  }
-
-  function broadcastToAll(message, excludeUserId = null) {
-    clients.forEach((client, userId) => {
-      if (userId !== excludeUserId) {
-        forwardToUser(userId, message)
+        forwardToUser(userId, message, '/notifications')
       }
     })
   }
@@ -555,35 +950,150 @@ function setupSignalingServer(server) {
   // Keep-alive ping every 30 seconds
   setInterval(() => {
     const now = Date.now()
-    clients.forEach((client, userId) => {
-      if (client.ws.readyState === client.ws.OPEN) {
-        // Check if client is inactive (no activity for 5 minutes)
-        if (now - client.lastActivity > 300000) {
-          console.warn(`⚠️ Client ${userId} inactive, closing connection`)
-          client.ws.close(1000, 'Inactive')
-          return
-        }
 
-        client.ws.send(JSON.stringify({ type: 'ping' }))
+    ;[notificationClients, postsClients, signalingClients].forEach(
+      (clients, idx) => {
+        const endpoint = ['/notifications', '/posts', '/signaling'][idx]
+
+        clients.forEach((client, userId) => {
+          if (client.ws.readyState === client.ws.OPEN) {
+            if (now - client.lastActivity > 300000) {
+              console.warn(
+                `⚠️ Client ${userId} on ${endpoint} inactive, closing`
+              )
+              client.ws.close(1000, 'Inactive')
+              return
+            }
+
+            try {
+              client.ws.send(JSON.stringify({ type: 'ping' }))
+            } catch (err) {
+              console.error(
+                `❌ Failed to ping ${userId} on ${endpoint}:`,
+                err.message
+              )
+            }
+          }
+        })
       }
-    })
+    )
   }, 30000)
 
   // Cleanup inactive connections every minute
   setInterval(() => {
-    const now = Date.now()
-    clients.forEach((client, userId) => {
-      if (client.ws.readyState !== client.ws.OPEN) {
-        clients.delete(userId)
-        console.log(`🧹 Cleaned up closed connection for user ${userId}`)
+    ;[notificationClients, postsClients, signalingClients].forEach(
+      (clients, idx) => {
+        const endpoint = ['/notifications', '/posts', '/signaling'][idx]
+
+        clients.forEach((client, userId) => {
+          if (client.ws.readyState !== client.ws.OPEN) {
+            clients.delete(userId)
+            console.log(
+              `🧹 Cleaned up closed connection for ${userId} on ${endpoint}`
+            )
+          }
+        })
       }
-    })
+    )
   }, 60000)
 
   console.log('✅ WebRTC signaling server initialized')
-  console.log('📡 Accepting connections on: /, /notifications, /signaling')
+  console.log(
+    '📡 Accepting connections on: /, /notifications, /signaling, /posts'
+  )
+  console.log('🔀 Supporting multiple concurrent connections per user')
 
-  return clients
+  // For backward compatibility with backend routes that use global.wsClients
+  // Create a unified Map that includes all clients
+  const unifiedClientsMap = new Map()
+
+  // Create a Proxy to dynamically merge all client maps
+  const wsClientsProxy = new Proxy(unifiedClientsMap, {
+    get(target, prop) {
+      // Return size from all maps combined
+      if (prop === 'size') {
+        return (
+          notificationClients.size + postsClients.size + signalingClients.size
+        )
+      }
+
+      // Return combined keys iterator
+      if (prop === 'keys') {
+        return function () {
+          const allKeys = new Set([
+            ...notificationClients.keys(),
+            ...postsClients.keys(),
+            ...signalingClients.keys(),
+          ])
+          return allKeys.keys()
+        }
+      }
+
+      // Return combined values iterator
+      if (prop === 'values') {
+        return function () {
+          const allValues = [
+            ...notificationClients.values(),
+            ...postsClients.values(),
+            ...signalingClients.values(),
+          ]
+          return allValues.values()
+        }
+      }
+
+      // Return combined entries iterator
+      if (prop === 'entries') {
+        return function () {
+          const allEntries = [
+            ...notificationClients.entries(),
+            ...postsClients.entries(),
+            ...signalingClients.entries(),
+          ]
+          return allEntries.entries()
+        }
+      }
+
+      // forEach implementation
+      if (prop === 'forEach') {
+        return function (callback, thisArg) {
+          notificationClients.forEach(callback, thisArg)
+          postsClients.forEach(callback, thisArg)
+          signalingClients.forEach(callback, thisArg)
+        }
+      }
+
+      // has implementation - check all maps
+      if (prop === 'has') {
+        return function (key) {
+          return (
+            notificationClients.has(key) ||
+            postsClients.has(key) ||
+            signalingClients.has(key)
+          )
+        }
+      }
+
+      // get implementation - check notifications first, then posts, then signaling
+      if (prop === 'get') {
+        return function (key) {
+          return (
+            notificationClients.get(key) ||
+            postsClients.get(key) ||
+            signalingClients.get(key)
+          )
+        }
+      }
+
+      return target[prop]
+    },
+  })
+
+  return {
+    notificationClients,
+    postsClients,
+    signalingClients,
+    wsClients: wsClientsProxy, // For backward compatibility
+  }
 }
 
 module.exports = { setupSignalingServer }

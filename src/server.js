@@ -27,16 +27,41 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')))
 const server = http.createServer(app)
 
 // Setup signaling server and get client reference
-const wsClients = setupSignalingServer(server)
+const { wsClients, notificationClients, postsClients, signalingClients } =
+  setupSignalingServer(server)
 
-global.wsClients = wsClients // Make it globally accessible
+// ========================================
+// CRITICAL FIX: Attach wsClients to app
+// ========================================
+app.wsClients = wsClients // ← Make available to all routes via req.app.wsClients
 
-console.log('✅ Global wsClients initialized:', !!global.wsClients)
+global.notificationClients = notificationClients
+global.postsClients = postsClients
+global.signalingClients = signalingClients
+// Also set globally for backwards compatibility
+global.wsClients = wsClients
+
+console.log('✅ WebSocket clients initialized')
+console.log('   - app.wsClients:', !!app.wsClients)
+console.log('   - global.wsClients:', !!global.wsClients)
+console.log('   - Clients Map size:', wsClients.size)
 
 // Pass WebSocket clients to call routes
 if (wsClients) {
   setWebSocketClients(wsClients)
 }
+
+// ========================================
+// Middleware to ensure wsClients available in all routes
+// ========================================
+app.use((req, res, next) => {
+  // Double-check wsClients is available
+  if (!req.app.wsClients) {
+    console.warn('⚠️ wsClients not found on req.app, attaching...')
+    req.app.wsClients = wsClients
+  }
+  next()
+})
 
 // Start server
 const startServer = async () => {
@@ -88,6 +113,7 @@ const startServer = async () => {
         })
       }
     })
+
     // Health check
     app.get('/health', (req, res) => {
       res.json({
@@ -97,14 +123,97 @@ const startServer = async () => {
       })
     })
 
+    // ========================================
+    // WebSocket Status Endpoint - For debugging
+    // ========================================
+    app.get('/ws-status', (req, res) => {
+      const connectedClients = Array.from(wsClients.keys())
+
+      res.json({
+        status: 'ok',
+        wsClients: {
+          available: !!wsClients,
+          onAppObject: !!app.wsClients,
+          totalConnected: wsClients.size,
+          connectedUsers: connectedClients,
+        },
+        details: Array.from(wsClients.entries()).map(([userId, client]) => ({
+          userId,
+          online: client.online,
+          pathname: client.pathname,
+          connectedAt: client.connectedAt,
+          lastActivity: client.lastActivity,
+          readyState: client.ws.readyState, // 0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED
+        })),
+      })
+    })
+
+    // ========================================
+    // Test Broadcasting Endpoint - For debugging
+    // ========================================
+    app.post('/test-broadcast', (req, res) => {
+      const { type, message } = req.body
+
+      if (!wsClients || wsClients.size === 0) {
+        return res.json({
+          success: false,
+          error: 'No WebSocket clients connected',
+        })
+      }
+
+      let broadcastCount = 0
+      let failedCount = 0
+
+      wsClients.forEach((client, userId) => {
+        if (client.ws.readyState === 1) {
+          // OPEN
+          try {
+            client.ws.send(
+              JSON.stringify({
+                type: type || 'test-message',
+                message: message || 'Test broadcast',
+                timestamp: new Date().toISOString(),
+              })
+            )
+            broadcastCount++
+            console.log(`✅ Test broadcast sent to: ${userId}`)
+          } catch (err) {
+            failedCount++
+            console.error(`❌ Failed to send to ${userId}:`, err.message)
+          }
+        }
+      })
+
+      res.json({
+        success: true,
+        broadcastCount,
+        failedCount,
+        totalClients: wsClients.size,
+      })
+    })
+
     // Start server
     server.listen(5000, '0.0.0.0', () => {
-      console.log('🚀 Server running on http://0.0.0.0:5000')
-      console.log('📡 WebSocket signaling ready')
-      console.log('\n📋 Registered routes:')
+      console.log('\n╔════════════════════════════════════════╗')
+      console.log('║  Server running on http://0.0.0.0:5000 ║')
+      console.log('║  WebSocket signaling ready             ║')
+      console.log('╚════════════════════════════════════════╝\n')
+
+      console.log('📡 WebSocket Status:')
+      console.log(`   - Clients initialized: ${!!wsClients}`)
+      console.log(`   - Available on app: ${!!app.wsClients}`)
+      console.log(`   - Initial connections: ${wsClients.size}\n`)
+
+      console.log('🧪 Debug Endpoints:')
+      console.log('   - GET  /ws-status       - Check WebSocket status')
+      console.log('   - POST /test-broadcast  - Test message broadcasting')
+      console.log('   - GET  /health          - Health check\n')
+
+      console.log('📋 Registered routes:')
       routes.forEach((route) => {
-        console.log(`  ${route.method.toUpperCase().padEnd(6)} ${route.path}`)
+        console.log(`   ${route.method.toUpperCase().padEnd(6)} ${route.path}`)
       })
+      console.log('')
     })
   } catch (err) {
     console.error('❌ Failed to start server:', err)

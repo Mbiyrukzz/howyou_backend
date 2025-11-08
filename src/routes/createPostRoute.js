@@ -1,4 +1,4 @@
-// routes/createPostRoute.js
+// routes/createPostRoute.js - Enhanced with WebSocket broadcasting
 const { getCollections } = require('../db')
 const {
   uploadMultiple,
@@ -8,10 +8,33 @@ const { verifyAuthToken } = require('../middleware/verifyAuthToken')
 
 const SERVER_BASE_URL = process.env.SERVER_BASE_URL || 'http://localhost:5000'
 
+// ✅ Helper function to broadcast to WebSocket clients
+function broadcastToWebSocket(clients, message, excludeUserId = null) {
+  if (!clients || typeof clients.forEach !== 'function') {
+    console.warn('⚠️ WebSocket clients not available for broadcasting')
+    return
+  }
+
+  let broadcastCount = 0
+  clients.forEach((client, userId) => {
+    if (userId !== excludeUserId && client.ws.readyState === 1) {
+      // 1 = OPEN
+      try {
+        client.ws.send(JSON.stringify(message))
+        broadcastCount++
+      } catch (error) {
+        console.error(`Failed to send to ${userId}:`, error.message)
+      }
+    }
+  })
+
+  console.log(`📡 Broadcasted ${message.type} to ${broadcastCount} users`)
+}
+
 const createPostRoute = {
   path: '/posts',
   method: 'post',
-  middleware: [verifyAuthToken, uploadMultiple('files', 10)], // Max 10 images per post
+  middleware: [verifyAuthToken, uploadMultiple('files', 10)],
   handler: async (req, res) => {
     console.log('\n=== Create Post Request ===')
     console.log('User UID:', req.user?.uid)
@@ -22,7 +45,6 @@ const createPostRoute = {
       const { content } = req.body
       const files = req.files || []
 
-      // Validation - content OR files required
       if (!content?.trim() && files.length === 0) {
         console.log('❌ No content or files provided')
         return res.status(400).json({
@@ -33,7 +55,6 @@ const createPostRoute = {
 
       const { posts, users } = getCollections()
 
-      // Verify user exists
       console.log('Looking for user with firebaseUid:', req.user.uid)
       const user = await users.findOne({ firebaseUid: req.user.uid })
 
@@ -59,7 +80,7 @@ const createPostRoute = {
 
         processedFiles.push({
           url: fullUrl,
-          type: info.type, // 'image' or 'video'
+          type: info.type,
           mimeType: file.mimetype,
           size: file.size,
           filename: file.filename,
@@ -83,8 +104,8 @@ const createPostRoute = {
         likes: 0,
         comments: 0,
         shares: 0,
-        isLiked: false, // For this user
-        likedBy: [], // Array of user IDs who liked this
+        isLiked: false,
+        likedBy: [],
         createdAt: new Date(),
         updatedAt: new Date(),
       }
@@ -98,10 +119,20 @@ const createPostRoute = {
       }
 
       console.log('✅ Post created:', createdPost._id)
-      console.log('Post details:', {
-        content: createdPost.content?.substring(0, 50),
-        filesCount: createdPost.files.length,
-      })
+
+      // ✅ Broadcast to WebSocket clients
+      if (req.app.wsClients) {
+        broadcastToWebSocket(
+          req.app.wsClients,
+          {
+            type: 'new-post',
+            post: createdPost,
+            senderId: req.user.uid,
+            timestamp: new Date().toISOString(),
+          },
+          req.user.uid // Exclude sender
+        )
+      }
 
       res.status(201).json({
         success: true,
@@ -136,7 +167,6 @@ const getPostsRoute = {
 
       const skip = (parseInt(page) - 1) * parseInt(limit)
 
-      // Get posts with pagination
       const allPosts = await posts
         .find({})
         .sort({ createdAt: -1 })
@@ -144,7 +174,6 @@ const getPostsRoute = {
         .limit(parseInt(limit))
         .toArray()
 
-      // Add isLiked flag for current user
       const postsWithLikeStatus = allPosts.map((post) => ({
         ...post,
         isLiked: post.likedBy?.includes(req.user.uid) || false,
@@ -188,7 +217,6 @@ const getPostRoute = {
         })
       }
 
-      // Add isLiked flag
       post.isLiked = post.likedBy?.includes(req.user.uid) || false
 
       res.json({ success: true, post })
@@ -214,7 +242,6 @@ const updatePostRoute = {
       const postId = req.params.id
       const { content } = req.body
 
-      // Find post and verify ownership
       const post = await posts.findOne({
         _id: new ObjectId(postId),
         userId: req.user.uid,
@@ -227,7 +254,6 @@ const updatePostRoute = {
         })
       }
 
-      // Update post
       const result = await posts.updateOne(
         { _id: new ObjectId(postId) },
         {
@@ -240,6 +266,21 @@ const updatePostRoute = {
 
       const updatedPost = await posts.findOne({ _id: new ObjectId(postId) })
       updatedPost.isLiked = updatedPost.likedBy?.includes(req.user.uid) || false
+
+      // ✅ Broadcast update
+      if (req.app.wsClients) {
+        broadcastToWebSocket(
+          req.app.wsClients,
+          {
+            type: 'post-updated',
+            postId,
+            post: updatedPost,
+            senderId: req.user.uid,
+            timestamp: new Date().toISOString(),
+          },
+          req.user.uid
+        )
+      }
 
       res.json({
         success: true,
@@ -271,7 +312,6 @@ const deletePostRoute = {
       const { posts } = getCollections()
       const postId = req.params.id
 
-      // Find post and verify ownership
       const post = await posts.findOne({
         _id: new ObjectId(postId),
         userId: req.user.uid,
@@ -308,6 +348,20 @@ const deletePostRoute = {
 
       await posts.deleteOne({ _id: new ObjectId(postId) })
       console.log('✅ Post deleted')
+
+      // ✅ Broadcast deletion
+      if (req.app.wsClients) {
+        broadcastToWebSocket(
+          req.app.wsClients,
+          {
+            type: 'post-deleted',
+            postId,
+            senderId: req.user.uid,
+            timestamp: new Date().toISOString(),
+          },
+          req.user.uid
+        )
+      }
 
       res.json({
         success: true,
@@ -368,6 +422,21 @@ const toggleLikeRoute = {
 
       const updatedPost = await posts.findOne({ _id: new ObjectId(postId) })
       updatedPost.isLiked = updatedPost.likedBy?.includes(userId) || false
+
+      // ✅ Broadcast like/unlike event
+      if (req.app.wsClients) {
+        broadcastToWebSocket(
+          req.app.wsClients,
+          {
+            type: hasLiked ? 'post-unliked' : 'post-liked',
+            postId,
+            userId,
+            newLikeCount: updatedPost.likes,
+            timestamp: new Date().toISOString(),
+          },
+          userId
+        )
+      }
 
       res.json({
         success: true,

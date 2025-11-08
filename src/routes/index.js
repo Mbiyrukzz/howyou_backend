@@ -25,6 +25,7 @@ const {
   createStatusRoute,
   getStatusesRoute,
   deleteStatusRoute,
+  getMyStatusRoute,
 } = require('./createStatusRoute')
 const {
   createPostRoute,
@@ -34,7 +35,7 @@ const {
   toggleLikeRoute,
   getPostsRoute,
 } = require('./createPostRoute')
-const { getMyStatusRoute } = require('./getMyStatusRoute')
+
 const { updateLastSeenRoute } = require('./updateLastSeen')
 const { deleteMessageRoute } = require('./deleteMessageRoute')
 

@@ -1,4 +1,4 @@
-// routes/createStatusRoute.js - Enhanced with 5 status per day limit
+// routes/createStatusRoute.js - Enhanced with WebSocket broadcasting
 const { getCollections } = require('../db')
 const {
   uploadMultiple,
@@ -8,6 +8,28 @@ const { verifyAuthToken } = require('../middleware/verifyAuthToken')
 
 const SERVER_BASE_URL = process.env.SERVER_BASE_URL || 'http://localhost:5000'
 const MAX_STATUSES_PER_DAY = 5
+
+// ✅ Helper function to broadcast to WebSocket clients
+function broadcastToWebSocket(clients, message, excludeUserId = null) {
+  if (!clients || typeof clients.forEach !== 'function') {
+    console.warn('⚠️ WebSocket clients not available for broadcasting')
+    return
+  }
+
+  let broadcastCount = 0
+  clients.forEach((client, userId) => {
+    if (userId !== excludeUserId && client.ws.readyState === 1) {
+      try {
+        client.ws.send(JSON.stringify(message))
+        broadcastCount++
+      } catch (error) {
+        console.error(`Failed to send to ${userId}:`, error.message)
+      }
+    }
+  })
+
+  console.log(`📡 Broadcasted ${message.type} to ${broadcastCount} users`)
+}
 
 const createStatusRoute = {
   path: '/status',
@@ -33,7 +55,6 @@ const createStatusRoute = {
       const { caption } = req.body
       const files = req.files || []
 
-      // Validation
       if (!files.length) {
         console.log('❌ No files received')
         return res
@@ -43,9 +64,7 @@ const createStatusRoute = {
 
       const { statuses, users } = getCollections()
 
-      // ═══════════════════════════════════════════════════════
-      // 🔥 CHECK DAILY LIMIT (5 statuses per day)
-      // ═══════════════════════════════════════════════════════
+      // Check daily limit
       const todayStart = new Date()
       todayStart.setHours(0, 0, 0, 0)
 
@@ -74,13 +93,12 @@ const createStatusRoute = {
         })
       }
 
-      // Verify user exists
+      // Verify user
       console.log('Looking for user with firebaseUid:', req.user.uid)
       const user = await users.findOne({ firebaseUid: req.user.uid })
 
       if (!user) {
         console.log('❌ User not found in database')
-        // Let's also check what users exist
         const allUsers = await users.find({}).limit(5).toArray()
         console.log(
           'Sample users in DB:',
@@ -131,6 +149,21 @@ const createStatusRoute = {
       }
 
       console.log('✅ Status created:', createdStatus._id)
+
+      // ✅ Broadcast to WebSocket clients
+      if (req.app.wsClients) {
+        broadcastToWebSocket(
+          req.app.wsClients,
+          {
+            type: 'new-status',
+            status: createdStatus,
+            userId: req.user.uid,
+            timestamp: new Date().toISOString(),
+          },
+          req.user.uid // Exclude sender
+        )
+      }
+
       res.json({
         success: true,
         status: createdStatus,
@@ -193,16 +226,16 @@ const getStatusesRoute = {
         groupedByUser[status.userId].statuses.push(status)
       })
 
-      // Convert to array and add the first status data for preview
+      // Convert to array
       const groupedStatuses = Object.values(groupedByUser).map((group) => ({
-        _id: group.statuses[0]._id, // Use first status ID
+        _id: group.statuses[0]._id,
         userId: group.userId,
         userName: group.userName,
         userAvatarColor: group.userAvatarColor,
-        fileUrl: group.statuses[0].fileUrl, // Show first status as preview
+        fileUrl: group.statuses[0].fileUrl,
         fileType: group.statuses[0].fileType,
         statusCount: group.statuses.length,
-        statuses: group.statuses, // All statuses for this user
+        statuses: group.statuses,
         createdAt: group.statuses[0].createdAt,
       }))
 
@@ -219,6 +252,46 @@ const getStatusesRoute = {
       res.status(500).json({
         success: false,
         error: 'Failed to fetch statuses',
+        details: err.message,
+      })
+    }
+  },
+}
+
+// GET my statuses
+const getMyStatusRoute = {
+  path: '/status/my',
+  method: 'get',
+  middleware: [verifyAuthToken],
+  handler: async (req, res) => {
+    console.log('\n=== Get My Status Request ===')
+    console.log('User UID:', req.user?.uid)
+
+    try {
+      const { statuses } = getCollections()
+
+      const now = new Date()
+
+      // Find all active statuses for current user
+      const myStatuses = await statuses
+        .find({
+          userId: req.user.uid,
+          expiresAt: { $gt: now },
+        })
+        .sort({ createdAt: -1 })
+        .toArray()
+
+      console.log(`✅ Found ${myStatuses.length} active statuses for user`)
+
+      res.json({
+        success: true,
+        statuses: myStatuses,
+      })
+    } catch (err) {
+      console.error('❌ Get my status error:', err)
+      res.status(500).json({
+        success: false,
+        error: 'Failed to fetch your statuses',
         details: err.message,
       })
     }
@@ -252,8 +325,40 @@ const deleteStatusRoute = {
           .json({ success: false, error: 'Status not found or not owner' })
       }
 
+      // Optional: Delete associated file
+      if (status.fileUrl) {
+        const fs = require('fs').promises
+        const path = require('path')
+        const url = require('url')
+
+        try {
+          const urlPath = url.parse(status.fileUrl).pathname
+          const filename = path.basename(urlPath)
+          const filePath = path.join(__dirname, '..', 'uploads', filename)
+          await fs.unlink(filePath)
+          console.log('Deleted file:', filename)
+        } catch (err) {
+          console.log('Could not delete file:', err.message)
+        }
+      }
+
       await statuses.deleteOne({ _id: new ObjectId(statusId) })
       console.log('✅ Status deleted')
+
+      // ✅ Broadcast deletion
+      if (req.app.wsClients) {
+        broadcastToWebSocket(
+          req.app.wsClients,
+          {
+            type: 'status-deleted',
+            statusId,
+            userId: req.user.uid,
+            timestamp: new Date().toISOString(),
+          },
+          req.user.uid
+        )
+      }
+
       res.json({ success: true })
     } catch (err) {
       console.error('❌ Delete status error:', err)
@@ -267,4 +372,9 @@ const deleteStatusRoute = {
   },
 }
 
-module.exports = { createStatusRoute, deleteStatusRoute, getStatusesRoute }
+module.exports = {
+  createStatusRoute,
+  deleteStatusRoute,
+  getStatusesRoute,
+  getMyStatusRoute,
+}

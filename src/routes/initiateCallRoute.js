@@ -8,15 +8,41 @@ const {
 } = require('../utils/pushNotifications')
 
 let wsClients = null
+let signalingClients = null
+let notificationClients = null
 
 function setWebSocketClients(clients) {
   wsClients = clients
+  // Also get specific endpoint clients from global
+  signalingClients = global.signalingClients
+  notificationClients = global.notificationClients
+  console.log('✅ Call routes initialized with WebSocket clients:', {
+    unified: !!wsClients,
+    signaling: !!signalingClients,
+    notifications: !!notificationClients,
+  })
 }
 
-function sendToUser(userId, message) {
-  const client = wsClients?.get(userId)
+// Helper to send to specific endpoint
+function sendToUserOnEndpoint(userId, message, endpoint = 'signaling') {
+  let clientMap
+
+  if (endpoint === 'signaling') {
+    clientMap = signalingClients || global.signalingClients
+  } else if (endpoint === 'notifications') {
+    clientMap = notificationClients || global.notificationClients
+  } else {
+    clientMap = wsClients
+  }
+
+  if (!clientMap) {
+    console.warn(`⚠️ No client map available for endpoint: ${endpoint}`)
+    return false
+  }
+
+  const client = clientMap.get(userId)
   if (!client) {
-    console.warn(`⚠️ No active WS client for ${userId}`)
+    console.warn(`⚠️ No active WS client for ${userId} on /${endpoint}`)
     return false
   }
 
@@ -26,17 +52,31 @@ function sendToUser(userId, message) {
     return false
   }
 
-  if (socket.readyState === socket.OPEN) {
+  if (socket.readyState === 1) {
+    // WebSocket.OPEN
     socket.send(JSON.stringify(message))
-    console.log(`📨 Sent WS message to ${userId}: ${message.type}`)
+    console.log(
+      `📨 Sent WS message to ${userId} on /${endpoint}: ${message.type}`
+    )
     return true
   }
 
-  console.warn(`⚠️ WebSocket not open for ${userId}`)
+  console.warn(
+    `⚠️ WebSocket not open for ${userId} (state: ${socket.readyState})`
+  )
   return false
 }
 
-// Initiate a call - UPDATED with push notifications
+// Legacy function for backward compatibility
+function sendToUser(userId, message) {
+  // Try signaling first, then notifications
+  return (
+    sendToUserOnEndpoint(userId, message, 'signaling') ||
+    sendToUserOnEndpoint(userId, message, 'notifications')
+  )
+}
+
+// Initiate a call
 const initiateCallRoute = {
   path: '/initiate-call',
   method: 'post',
@@ -127,17 +167,31 @@ const initiateCallRoute = {
         timestamp: new Date().toISOString(),
       }
 
-      // Send WebSocket notification to recipient (if online)
-      const wsNotificationSent = sendToUser(recipientId, {
-        type: 'incoming_call',
-        ...callData,
-      })
+      // ✅ Send to BOTH signaling and notifications endpoints
+      // Signaling: For if user is already on call screen
+      const signalingNotificationSent = sendToUserOnEndpoint(
+        recipientId,
+        {
+          type: 'incoming_call',
+          ...callData,
+        },
+        'signaling'
+      )
 
-      if (wsNotificationSent) {
-        console.log(`✅ WebSocket notification sent to ${recipientId}`)
-      } else {
-        console.warn(`⚠️ Recipient ${recipientId} is offline via WebSocket`)
-      }
+      // Notifications: For in-app notification banner
+      const notificationsSent = sendToUserOnEndpoint(
+        recipientId,
+        {
+          type: 'incoming_call',
+          ...callData,
+        },
+        'notifications'
+      )
+
+      console.log('📨 WebSocket notifications sent:', {
+        signaling: signalingNotificationSent,
+        notifications: notificationsSent,
+      })
 
       // ALWAYS send push notification (works even if user is offline)
       const pushNotificationSent = await sendCallNotification(
@@ -158,12 +212,13 @@ const initiateCallRoute = {
         call: { ...newCall, _id: result.insertedId },
         message: `${callType} call initiated`,
         notificationSent: {
-          websocket: wsNotificationSent,
+          signaling: signalingNotificationSent,
+          notifications: notificationsSent,
           push: pushNotificationSent,
         },
       })
     } catch (err) {
-      console.error('❌ Error initiating call:', err.stack) // Log full stack trace
+      console.error('❌ Error initiating call:', err.stack)
       res.status(500).json({
         success: false,
         error: 'Failed to initiate call',
@@ -223,27 +278,59 @@ const answerCallRoute = {
       if (accepted) {
         updateData.actualStartTime = new Date()
 
-        // ✅ Notify caller that call was accepted
-        const acceptNotificationSent = sendToUser(call.callerId, {
-          type: 'call_accepted',
-          callId: callId,
-          recipientId: req.user.uid,
-          recipientName: recipientName,
-          timestamp: new Date().toISOString(),
-        })
+        // ✅ CRITICAL: Send to SIGNALING endpoint for WebRTC coordination
+        const acceptNotificationSent = sendToUserOnEndpoint(
+          call.callerId,
+          {
+            type: 'call_accepted',
+            callId: callId,
+            recipientId: req.user.uid,
+            recipientName: recipientName,
+            chatId: call.chatId.toString(),
+            timestamp: new Date().toISOString(),
+          },
+          'signaling'
+        )
 
         console.log(
-          `✅ Call accepted notification sent: ${acceptNotificationSent}`
+          `✅ Call accepted notification sent to /signaling: ${acceptNotificationSent}`
+        )
+
+        // Also send to notifications for UI updates
+        sendToUserOnEndpoint(
+          call.callerId,
+          {
+            type: 'call_accepted',
+            callId: callId,
+            recipientName: recipientName,
+            timestamp: new Date().toISOString(),
+          },
+          'notifications'
         )
       } else {
-        // ✅ Notify caller that call was rejected
-        const rejectNotificationSent = sendToUser(call.callerId, {
-          type: 'call_rejected',
-          callId: callId,
-          recipientId: req.user.uid,
-          recipientName: recipientName,
-          timestamp: new Date().toISOString(),
-        })
+        // ✅ Send rejection to both endpoints
+        const rejectNotificationSent = sendToUserOnEndpoint(
+          call.callerId,
+          {
+            type: 'call_rejected',
+            callId: callId,
+            recipientId: req.user.uid,
+            recipientName: recipientName,
+            timestamp: new Date().toISOString(),
+          },
+          'signaling'
+        )
+
+        sendToUserOnEndpoint(
+          call.callerId,
+          {
+            type: 'call_rejected',
+            callId: callId,
+            recipientName: recipientName,
+            timestamp: new Date().toISOString(),
+          },
+          'notifications'
+        )
 
         console.log(
           `✅ Call rejected notification sent: ${rejectNotificationSent}`
@@ -276,7 +363,7 @@ const answerCallRoute = {
     }
   },
 }
-// End a call - UPDATED
+
 const endCallRoute = {
   path: '/end-call/:callId',
   method: 'post',
@@ -324,17 +411,32 @@ const endCallRoute = {
         }
       )
 
-      // Notify the other party
+      // Notify the other party on both endpoints
       const otherUserId =
         call.callerId === req.user.uid ? call.recipientId : call.callerId
 
-      sendToUser(otherUserId, {
-        type: 'call_ended',
-        callId: callId,
-        endedBy: req.user.uid,
-        duration: duration,
-        timestamp: new Date().toISOString(),
-      })
+      sendToUserOnEndpoint(
+        otherUserId,
+        {
+          type: 'call_ended',
+          callId: callId,
+          endedBy: req.user.uid,
+          duration: duration,
+          timestamp: new Date().toISOString(),
+        },
+        'signaling'
+      )
+
+      sendToUserOnEndpoint(
+        otherUserId,
+        {
+          type: 'call_ended',
+          callId: callId,
+          duration: duration,
+          timestamp: new Date().toISOString(),
+        },
+        'notifications'
+      )
 
       // Send push notification for call ended
       const currentUser = await users.findOne({ firebaseUid: req.user.uid })
@@ -373,7 +475,7 @@ const cancelCallRoute = {
   handler: async (req, res) => {
     try {
       const { callId } = req.params
-      const { reason } = req.body // 'timeout' or 'cancelled'
+      const { reason } = req.body
 
       console.log('⏰ Cancel call request:', {
         callId,
@@ -392,7 +494,7 @@ const cancelCallRoute = {
 
       const call = await calls.findOne({
         _id: new ObjectId(callId),
-        callerId: req.user.uid, // Only caller can cancel
+        callerId: req.user.uid,
         status: 'initiated',
       })
 
@@ -411,19 +513,33 @@ const cancelCallRoute = {
 
       await calls.updateOne({ _id: new ObjectId(callId) }, { $set: updateData })
 
-      // Get caller info
       const caller = await users.findOne({ firebaseUid: req.user.uid })
       const callerName =
         caller?.name || req.user.displayName || req.user.email || 'Unknown'
 
-      // Notify recipient that call ended
-      sendToUser(call.recipientId, {
-        type: 'call-ended',
-        callId: callId,
-        reason: reason,
-        callerName: callerName,
-        timestamp: new Date().toISOString(),
-      })
+      // Notify recipient on both endpoints
+      sendToUserOnEndpoint(
+        call.recipientId,
+        {
+          type: 'call-ended',
+          callId: callId,
+          reason: reason,
+          callerName: callerName,
+          timestamp: new Date().toISOString(),
+        },
+        'signaling'
+      )
+
+      sendToUserOnEndpoint(
+        call.recipientId,
+        {
+          type: 'call-ended',
+          callId: callId,
+          reason: reason,
+          timestamp: new Date().toISOString(),
+        },
+        'notifications'
+      )
 
       // Send missed call notification
       if (reason === 'timeout') {
@@ -452,7 +568,6 @@ const cancelCallRoute = {
   },
 }
 
-// Get call history (unchanged)
 const getCallHistoryRoute = {
   path: '/call-history/:chatId',
   method: 'get',
