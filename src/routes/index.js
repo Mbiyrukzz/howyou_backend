@@ -31,9 +31,10 @@ const {
   createPostRoute,
   getPostRoute,
   updatePostRoute,
-  deletePostRoute,
+
   toggleLikeRoute,
   getPostsRoute,
+  deletePostRoute,
 } = require('./createPostRoute')
 
 const { updateLastSeenRoute } = require('./updateLastSeen')
@@ -64,6 +65,7 @@ const routes = [
   getPostsRoute,
   updatePostRoute,
   deletePostRoute,
+
   toggleLikeRoute,
 
   listUsersRoute,

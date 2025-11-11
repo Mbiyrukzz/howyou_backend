@@ -28,7 +28,7 @@ const userOwnMessage = async (req, res, next) => {
 
     const message = await messages.findOne({
       _id: messageObjId,
-      senderId: uid, // string vs string
+      senderId: uid,
     })
 
     console.log('DB result:', message ? 'FOUND' : 'NOT FOUND')
