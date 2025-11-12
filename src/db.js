@@ -33,6 +33,7 @@ const getCollections = () => {
     voice: database.collection('voice'),
     statuses: db.collection('statuses'),
     posts: db.collection('posts'),
+    comments: db.collection('comments'),
   }
 }
 
