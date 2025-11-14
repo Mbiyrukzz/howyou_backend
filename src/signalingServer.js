@@ -1,14 +1,15 @@
-// signalingServer.js - Fixed to support multiple connections per user
+// signalingServer.js - Added /comments endpoint
 const { WebSocketServer } = require('ws')
 const url = require('url')
 
 function setupSignalingServer(server) {
   const wss = new WebSocketServer({ noServer: true })
 
-  // NEW: Separate connection maps per endpoint to avoid conflicts
+  // Separate connection maps per endpoint
   const notificationClients = new Map() // Map<userId, {ws, metadata}>
   const postsClients = new Map() // Map<userId, {ws, metadata}>
   const signalingClients = new Map() // Map<userId, {ws, metadata}>
+  const commentsClients = new Map() // ✅ NEW: Map<userId, {ws, metadata}>
 
   const callRooms = new Map() // Map<chatId, Set<userId>>
   const typingUsers = new Map() // Map<chatId, Map<userId, timeoutId>>
@@ -17,6 +18,7 @@ function setupSignalingServer(server) {
   function getClientMap(endpoint) {
     if (endpoint === '/posts') return postsClients
     if (endpoint === '/signaling') return signalingClients
+    if (endpoint === '/comments') return commentsClients // ✅ NEW
     return notificationClients // default for /notifications and /
   }
 
@@ -26,6 +28,7 @@ function setupSignalingServer(server) {
     notificationClients.forEach((_, userId) => users.add(userId))
     postsClients.forEach((_, userId) => users.add(userId))
     signalingClients.forEach((_, userId) => users.add(userId))
+    commentsClients.forEach((_, userId) => users.add(userId)) // ✅ NEW
     return Array.from(users)
   }
 
@@ -39,7 +42,8 @@ function setupSignalingServer(server) {
       pathname === '/' ||
       pathname === '/notifications' ||
       pathname === '/signaling' ||
-      pathname === '/posts'
+      pathname === '/posts' ||
+      pathname === '/comments' // ✅ NEW
     ) {
       wss.handleUpgrade(request, socket, head, (ws) => {
         wss.emit('connection', ws, request)
@@ -91,7 +95,7 @@ function setupSignalingServer(server) {
 
     console.log(`✅ User connected: ${userId} on ${pathname}`)
     console.log(
-      `📊 Connections - Notifications: ${notificationClients.size}, Posts: ${postsClients.size}, Signaling: ${signalingClients.size}`
+      `📊 Connections - Notifications: ${notificationClients.size}, Posts: ${postsClients.size}, Comments: ${commentsClients.size}, Signaling: ${signalingClients.size}`
     )
 
     // If chatId provided, add to call room
@@ -109,7 +113,7 @@ function setupSignalingServer(server) {
       })
     }
 
-    // Broadcast online status to all users on ALL endpoints
+    // Broadcast online status to all users on relevant endpoints
     const onlineMessage = {
       type: 'user-online',
       userId,
@@ -117,6 +121,7 @@ function setupSignalingServer(server) {
     }
     broadcastToEndpoint('/notifications', onlineMessage)
     broadcastToEndpoint('/posts', onlineMessage)
+    broadcastToEndpoint('/comments', onlineMessage) // ✅ NEW
 
     // Send connection confirmation
     ws.send(
@@ -150,14 +155,15 @@ function setupSignalingServer(server) {
       clients.delete(userId)
       console.log(`❌ User disconnected: ${userId} from ${pathname}`)
       console.log(
-        `📊 Connections - Notifications: ${notificationClients.size}, Posts: ${postsClients.size}, Signaling: ${signalingClients.size}`
+        `📊 Connections - Notifications: ${notificationClients.size}, Posts: ${postsClients.size}, Comments: ${commentsClients.size}, Signaling: ${signalingClients.size}`
       )
 
       // Only broadcast offline if user is not connected on ANY endpoint
       const stillConnected =
         notificationClients.has(userId) ||
         postsClients.has(userId) ||
-        signalingClients.has(userId)
+        signalingClients.has(userId) ||
+        commentsClients.has(userId) // ✅ NEW
 
       if (!stillConnected) {
         const offlineMessage = {
@@ -167,6 +173,7 @@ function setupSignalingServer(server) {
         }
         broadcastToEndpoint('/notifications', offlineMessage)
         broadcastToEndpoint('/posts', offlineMessage)
+        broadcastToEndpoint('/comments', offlineMessage) // ✅ NEW
       }
 
       // Clear typing indicators
@@ -209,15 +216,12 @@ function setupSignalingServer(server) {
   // Handle signaling messages
   function handleSignalMessage(senderId, endpoint, data) {
     console.log(`📨 Message from ${senderId} on ${endpoint}:`, data.type)
-    console.log(`📦 Message data:`, JSON.stringify(data, null, 2))
 
     // Update last activity on the correct client map
     const clients = getClientMap(endpoint)
     const client = clients.get(senderId)
     if (client) {
       client.lastActivity = Date.now()
-    } else {
-      console.warn(`⚠️ Client ${senderId} not found in ${endpoint} map!`)
     }
 
     switch (data.type) {
@@ -280,9 +284,6 @@ function setupSignalingServer(server) {
 
       case 'call-answered':
       case 'call_accepted':
-        console.log('📞 Call answered/accepted')
-
-        // Send to caller (initiator)
         if (data.to) {
           forwardToUser(
             data.to,
@@ -294,10 +295,8 @@ function setupSignalingServer(server) {
             },
             '/signaling'
           )
-          console.log(`✅ Notified caller ${data.to} that call was accepted`)
         }
 
-        // ✅ NEW: Also confirm to the answerer
         forwardToUser(
           senderId,
           {
@@ -309,10 +308,6 @@ function setupSignalingServer(server) {
           },
           '/signaling'
         )
-        console.log(
-          `✅ Confirmed to answerer ${senderId} to proceed with WebRTC`
-        )
-
         break
 
       case 'end-call':
@@ -340,7 +335,7 @@ function setupSignalingServer(server) {
         handleMessageRead(senderId, data)
         break
 
-      // ===== POSTS & STATUSES & COMMENTS =====
+      // ===== POSTS & STATUSES =====
       case 'new-post':
         handleNewPost(senderId, data)
         break
@@ -369,6 +364,7 @@ function setupSignalingServer(server) {
         handleStatusDeleted(senderId, data)
         break
 
+      // ===== COMMENTS (NEW - routed to /comments endpoint) =====
       case 'new-comment':
         handleNewComment(senderId, data)
         break
@@ -420,6 +416,119 @@ function setupSignalingServer(server) {
     }
   }
 
+  // ===== COMMENT HANDLERS (Broadcast to /comments clients) =====
+  function handleNewComment(senderId, data) {
+    const { comment, postId } = data
+
+    console.log(
+      `💬 Broadcasting new comment from ${senderId} for post ${postId}:`,
+      comment._id
+    )
+    console.log(
+      `📊 Broadcasting to ${commentsClients.size - 1} other comment clients`
+    )
+
+    // Broadcast to all /comments clients EXCEPT sender
+    broadcastToEndpoint(
+      '/comments',
+      {
+        type: 'new-comment',
+        comment,
+        postId,
+        senderId,
+        timestamp: new Date().toISOString(),
+      },
+      senderId
+    )
+  }
+
+  function handleCommentUpdated(senderId, data) {
+    const { commentId, comment, postId } = data
+
+    console.log(
+      `✏️ Broadcasting comment update from ${senderId} for post ${postId}:`,
+      commentId
+    )
+
+    broadcastToEndpoint(
+      '/comments',
+      {
+        type: 'comment-updated',
+        commentId,
+        comment,
+        postId,
+        senderId,
+        timestamp: new Date().toISOString(),
+      },
+      senderId
+    )
+  }
+
+  function handleCommentDeleted(senderId, data) {
+    const { commentId, postId } = data
+
+    console.log(
+      `🗑️ Broadcasting comment deletion from ${senderId} for post ${postId}:`,
+      commentId
+    )
+
+    broadcastToEndpoint(
+      '/comments',
+      {
+        type: 'comment-deleted',
+        commentId,
+        postId,
+        senderId,
+        timestamp: new Date().toISOString(),
+      },
+      senderId
+    )
+  }
+
+  function handleCommentLiked(senderId, data) {
+    const { commentId, newLikeCount, postId } = data
+
+    console.log(
+      `❤️ Broadcasting comment like from ${senderId} for post ${postId}:`,
+      commentId
+    )
+
+    broadcastToEndpoint(
+      '/comments',
+      {
+        type: 'comment-liked',
+        commentId,
+        postId,
+        userId: senderId,
+        newLikeCount,
+        timestamp: new Date().toISOString(),
+      },
+      senderId
+    )
+  }
+
+  function handleCommentUnliked(senderId, data) {
+    const { commentId, newLikeCount, postId } = data
+
+    console.log(
+      `💔 Broadcasting comment unlike from ${senderId} for post ${postId}:`,
+      commentId
+    )
+
+    broadcastToEndpoint(
+      '/comments',
+      {
+        type: 'comment-unliked',
+        commentId,
+        postId,
+        userId: senderId,
+        newLikeCount,
+        timestamp: new Date().toISOString(),
+      },
+      senderId
+    )
+  }
+
   // ===== CALL HANDLERS =====
   function handleJoinCall(userId, data) {
     const { chatId } = data
@@ -441,18 +550,13 @@ function setupSignalingServer(server) {
   function handleEndCall(userId, data) {
     const { chatId, remoteUserId, reason } = data
 
-    console.log(`🔴 User ${userId} ending call in room: ${chatId}`, {
-      reason,
-      remoteUserId,
-    })
-
-    const messageType = 'call-ended'
+    console.log(`🔴 User ${userId} ending call in room: ${chatId}`)
 
     if (remoteUserId) {
       forwardToUser(
         remoteUserId,
         {
-          type: messageType,
+          type: 'call-ended',
           userId,
           chatId,
           reason: reason || 'user_ended',
@@ -460,11 +564,10 @@ function setupSignalingServer(server) {
         },
         '/notifications'
       )
-      console.log(`✅ Sent call-ended to specific user: ${remoteUserId}`)
     }
 
     broadcastToRoom(chatId, userId, {
-      type: messageType,
+      type: 'call-ended',
       userId,
       chatId,
       reason: reason || 'user_ended',
@@ -476,81 +579,36 @@ function setupSignalingServer(server) {
 
       if (callRooms.get(chatId).size === 0) {
         callRooms.delete(chatId)
-        console.log(`🧹 Call room ${chatId} cleaned up`)
       }
     }
-
-    console.log(`✅ Call ended notification sent for room: ${chatId}`)
   }
 
-  // ===== MESSAGE HANDLERS (sent to /notifications clients) =====
+  // ===== MESSAGE HANDLERS =====
   function handleNewMessage(senderId, data) {
     const { chatId, message, participants } = data
 
     console.log(`💬 New message in chat ${chatId} from ${senderId}`)
-    console.log(`👥 Participants:`, participants)
-    console.log(`📊 Total notification clients:`, notificationClients.size)
-    console.log(
-      `📋 Notification clients list:`,
-      Array.from(notificationClients.keys())
-    )
 
     if (!participants || !Array.isArray(participants)) {
-      console.error('❌ Invalid participants list:', participants)
+      console.error('❌ Invalid participants list')
       return
     }
 
-    // Send to all participants EXCEPT the sender on /notifications endpoint
-    let sentCount = 0
-    let skippedSender = false
-
     participants.forEach((participantId) => {
-      const participantStr = String(participantId)
-      const senderStr = String(senderId)
-
-      console.log(
-        `  Checking participant "${participantStr}" vs sender "${senderStr}"`
-      )
-
-      if (participantStr === senderStr) {
-        console.log(`  ⏭️ Skipping sender (exact match)`)
-        skippedSender = true
-        return
-      }
-
-      // Check if client exists on notifications endpoint
-      if (!notificationClients.has(participantStr)) {
-        console.warn(
-          `  ⚠️ Participant ${participantStr} not connected to /notifications`
+      if (String(participantId) !== String(senderId)) {
+        forwardToUser(
+          String(participantId),
+          {
+            type: 'new-message',
+            chatId,
+            message,
+            senderId,
+            timestamp: new Date().toISOString(),
+          },
+          '/notifications'
         )
-        return
-      }
-
-      const success = forwardToUser(
-        participantStr,
-        {
-          type: 'new-message',
-          chatId,
-          message,
-          senderId,
-          timestamp: new Date().toISOString(),
-        },
-        '/notifications'
-      )
-
-      if (success) {
-        sentCount++
-        console.log(`  ✅ Sent to ${participantStr}`)
-      } else {
-        console.log(`  ❌ Failed to send to ${participantStr}`)
       }
     })
-
-    console.log(`✅ Message broadcast complete:`)
-    console.log(`   - Total participants: ${participants.length}`)
-    console.log(`   - Sender skipped: ${skippedSender}`)
-    console.log(`   - Successfully sent: ${sentCount}`)
-    console.log(`   - Expected recipients: ${participants.length - 1}`)
 
     handleTypingStop(senderId, { chatId })
   }
@@ -590,9 +648,6 @@ function setupSignalingServer(server) {
   function handleMessageUpdated(senderId, data) {
     const { chatId, messageId, message, participants } = data
 
-    console.log(`✏️ Message updated in chat ${chatId} by ${senderId}`)
-
-    // Send to all participants EXCEPT the sender
     participants.forEach((participantId) => {
       if (participantId !== senderId) {
         forwardToUser(
@@ -614,9 +669,6 @@ function setupSignalingServer(server) {
   function handleMessageDeleted(senderId, data) {
     const { chatId, messageId, participants } = data
 
-    console.log(`🗑️ Message deleted in chat ${chatId} by ${senderId}`)
-
-    // Send to all participants EXCEPT the sender
     participants.forEach((participantId) => {
       if (participantId !== senderId) {
         forwardToUser(
@@ -634,16 +686,12 @@ function setupSignalingServer(server) {
     })
   }
 
-  // ===== POST HANDLERS (sent to /posts clients) =====
+  // ===== POST HANDLERS =====
   function handleNewPost(senderId, data) {
     const { post } = data
 
     console.log(`📝 Broadcasting new post from ${senderId}:`, post._id)
-    console.log(
-      `📊 Broadcasting to ${postsClients.size - 1} other posts clients`
-    )
 
-    // Broadcast to all /posts clients EXCEPT sender
     broadcastToEndpoint(
       '/posts',
       {
@@ -658,8 +706,6 @@ function setupSignalingServer(server) {
 
   function handlePostUpdated(senderId, data) {
     const { postId, post } = data
-
-    console.log(`✏️ Broadcasting post update from ${senderId}:`, postId)
 
     broadcastToEndpoint(
       '/posts',
@@ -677,8 +723,6 @@ function setupSignalingServer(server) {
   function handlePostDeleted(senderId, data) {
     const { postId } = data
 
-    console.log(`🗑️ Broadcasting post deletion from ${senderId}:`, postId)
-
     broadcastToEndpoint(
       '/posts',
       {
@@ -693,8 +737,6 @@ function setupSignalingServer(server) {
 
   function handlePostLiked(senderId, data) {
     const { postId, newLikeCount } = data
-
-    console.log(`❤️ Broadcasting post like from ${senderId}:`, postId)
 
     broadcastToEndpoint(
       '/posts',
@@ -712,8 +754,6 @@ function setupSignalingServer(server) {
   function handlePostUnliked(senderId, data) {
     const { postId, newLikeCount } = data
 
-    console.log(`💔 Broadcasting post unlike from ${senderId}:`, postId)
-
     broadcastToEndpoint(
       '/posts',
       {
@@ -727,103 +767,9 @@ function setupSignalingServer(server) {
     )
   }
 
-  function handleNewComment(senderId, data) {
-    const { comment } = data
-
-    console.log(`💬 Broadcasting new comment from ${senderId}:`, comment._id)
-
-    broadcastToEndpoint(
-      '/posts',
-      {
-        type: 'new-comment',
-        comment,
-        userId: senderId,
-        timestamp: new Date().toISOString(),
-      },
-      senderId
-    )
-  }
-
-  function handleCommentDeleted(senderId, data) {
-    const { commentId } = data
-
-    console.log(`🗑️ Broadcasting comment deletion from ${senderId}:`, commentId)
-
-    broadcastToEndpoint(
-      '/posts',
-      {
-        type: 'comment-deleted',
-        commentId,
-        userId: senderId,
-        timestamp: new Date().toISOString(),
-      },
-      senderId
-    )
-  }
-
-  function handleCommentUpdated(senderId, data) {
-    const { commentId, comment } = data
-
-    console.log(`✏️ Broadcasting comment update from ${senderId}:`, commentId)
-
-    broadcastToEndpoint(
-      '/posts',
-      {
-        type: 'comment-updated',
-        commentId,
-        comment,
-        userId: senderId,
-        timestamp: new Date().toISOString(),
-      },
-      senderId
-    )
-  }
-
-  function handleCommentLiked(senderId, data) {
-    const { commentId, newLikeCount } = data
-
-    console.log(`❤️ Broadcasting comment like from ${senderId}:`, commentId)
-
-    broadcastToEndpoint(
-      '/posts',
-      {
-        type: 'comment-liked',
-        commentId,
-        userId: senderId,
-        newLikeCount,
-        timestamp: new Date().toISOString(),
-      },
-      senderId
-    )
-  }
-
-  function handleCommentUnliked(senderId, data) {
-    const { commentId, newLikeCount } = data
-
-    console.log(`💔 Broadcasting comment unlike from ${senderId}:`, commentId)
-
-    broadcastToEndpoint(
-      '/posts',
-      {
-        type: 'comment-unliked',
-        commentId,
-        userId: senderId,
-        newLikeCount,
-        timestamp: new Date().toISOString(),
-      },
-      senderId
-    )
-  }
-
   function handleNewStatus(senderId, data) {
     const { status } = data
 
-    console.log(`📸 Broadcasting new status from ${senderId}:`, status._id)
-    console.log(
-      `📊 Broadcasting to ${postsClients.size - 1} other posts clients`
-    )
-
-    // Broadcast to all /posts clients EXCEPT sender
     broadcastToEndpoint(
       '/posts',
       {
@@ -838,8 +784,6 @@ function setupSignalingServer(server) {
 
   function handleStatusDeleted(senderId, data) {
     const { statusId } = data
-
-    console.log(`🗑️ Broadcasting status deletion from ${senderId}:`, statusId)
 
     broadcastToEndpoint(
       '/posts',
@@ -887,8 +831,6 @@ function setupSignalingServer(server) {
         )
       }
     })
-
-    console.log(`⌨️ User ${userId} started typing in chat ${chatId}`)
   }
 
   function handleTypingStop(userId, data) {
@@ -919,8 +861,6 @@ function setupSignalingServer(server) {
         }
       })
     }
-
-    console.log(`⌨️ User ${userId} stopped typing in chat ${chatId}`)
   }
 
   function handleLastSeenUpdate(userId, data) {
@@ -947,8 +887,6 @@ function setupSignalingServer(server) {
         }
       })
     }
-
-    console.log(`👁️ User ${userId} last seen updated in chat ${chatId}`)
   }
 
   // ===== STATUS HANDLERS =====
@@ -971,8 +909,7 @@ function setupSignalingServer(server) {
 
     broadcastToEndpoint('/notifications', message)
     broadcastToEndpoint('/posts', message)
-
-    console.log(`📍 User ${userId} status updated to: ${status}`)
+    broadcastToEndpoint('/comments', message) // ✅ NEW
   }
 
   // ===== UTILITY FUNCTIONS =====
@@ -982,10 +919,6 @@ function setupSignalingServer(server) {
 
     if (!client) {
       console.warn(`⚠️ User ${userId} not found on ${endpoint}`)
-      console.warn(
-        `   Available users on ${endpoint}:`,
-        Array.from(clients.keys())
-      )
       return false
     }
 
@@ -1063,103 +996,109 @@ function setupSignalingServer(server) {
   setInterval(() => {
     const now = Date.now()
 
-    ;[notificationClients, postsClients, signalingClients].forEach(
-      (clients, idx) => {
-        const endpoint = ['/notifications', '/posts', '/signaling'][idx]
+    ;[
+      notificationClients,
+      postsClients,
+      signalingClients,
+      commentsClients,
+    ].forEach((clients, idx) => {
+      const endpoint = ['/notifications', '/posts', '/signaling', '/comments'][
+        idx
+      ]
 
-        clients.forEach((client, userId) => {
-          if (client.ws.readyState === client.ws.OPEN) {
-            if (now - client.lastActivity > 300000) {
-              console.warn(
-                `⚠️ Client ${userId} on ${endpoint} inactive, closing`
-              )
-              client.ws.close(1000, 'Inactive')
-              return
-            }
-
-            try {
-              client.ws.send(JSON.stringify({ type: 'ping' }))
-            } catch (err) {
-              console.error(
-                `❌ Failed to ping ${userId} on ${endpoint}:`,
-                err.message
-              )
-            }
+      clients.forEach((client, userId) => {
+        if (client.ws.readyState === client.ws.OPEN) {
+          if (now - client.lastActivity > 300000) {
+            console.warn(`⚠️ Client ${userId} on ${endpoint} inactive, closing`)
+            client.ws.close(1000, 'Inactive')
+            return
           }
-        })
-      }
-    )
+
+          try {
+            client.ws.send(JSON.stringify({ type: 'ping' }))
+          } catch (err) {
+            console.error(
+              `❌ Failed to ping ${userId} on ${endpoint}:`,
+              err.message
+            )
+          }
+        }
+      })
+    })
   }, 30000)
 
   // Cleanup inactive connections every minute
   setInterval(() => {
-    ;[notificationClients, postsClients, signalingClients].forEach(
-      (clients, idx) => {
-        const endpoint = ['/notifications', '/posts', '/signaling'][idx]
+    ;[
+      notificationClients,
+      postsClients,
+      signalingClients,
+      commentsClients,
+    ].forEach((clients, idx) => {
+      const endpoint = ['/notifications', '/posts', '/signaling', '/comments'][
+        idx
+      ]
 
-        clients.forEach((client, userId) => {
-          if (client.ws.readyState !== client.ws.OPEN) {
-            clients.delete(userId)
-            console.log(
-              `🧹 Cleaned up closed connection for ${userId} on ${endpoint}`
-            )
-          }
-        })
-      }
-    )
+      clients.forEach((client, userId) => {
+        if (client.ws.readyState !== client.ws.OPEN) {
+          clients.delete(userId)
+          console.log(
+            `🧹 Cleaned up closed connection for ${userId} on ${endpoint}`
+          )
+        }
+      })
+    })
   }, 60000)
 
   console.log('✅ WebRTC signaling server initialized')
   console.log(
-    '📡 Accepting connections on: /, /notifications, /signaling, /posts'
+    '📡 Accepting connections on: /, /notifications, /signaling, /posts, /comments'
   )
-  console.log('🔀 Supporting multiple concurrent connections per user')
 
-  // For backward compatibility with backend routes that use global.wsClients
-  // Create a unified Map that includes all clients
+  // For backward compatibility
   const unifiedClientsMap = new Map()
-
-  // Create a Proxy to dynamically merge all client maps
   const wsClientsProxy = new Proxy(unifiedClientsMap, {
     get(target, prop) {
-      // Return size from all maps combined
       if (prop === 'size') {
         return (
-          notificationClients.size + postsClients.size + signalingClients.size
+          notificationClients.size +
+          postsClients.size +
+          signalingClients.size +
+          commentsClients.size
         )
       }
 
-      // Return combined keys iterator
       if (prop === 'keys') {
         return function () {
           const allKeys = new Set([
             ...notificationClients.keys(),
             ...postsClients.keys(),
             ...signalingClients.keys(),
+            ...commentsClients.keys(),
           ])
           return allKeys.keys()
         }
       }
 
-      // Return combined values iterator
       if (prop === 'values') {
         return function () {
           const allValues = [
             ...notificationClients.values(),
             ...postsClients.values(),
             ...signalingClients.values(),
+            ...commentsClients.values(),
           ]
           return allValues.values()
         }
       }
 
-      // Return combined entries iterator
       if (prop === 'entries') {
         return function () {
           const allEntries = [
             ...notificationClients.entries(),
             ...postsClients.entries(),
             ...signalingClients.entries(),
+            ...commentsClients.entries(),
           ]
           return allEntries.entries()
         }
@@ -1170,6 +1109,7 @@ function setupSignalingServer(server) {
         return function (callback, thisArg) {
           notificationClients.forEach(callback, thisArg)
           postsClients.forEach(callback, thisArg)
+          commentsClients.forEach(callback, thisArg)
           signalingClients.forEach(callback, thisArg)
         }
       }
@@ -1180,6 +1120,7 @@ function setupSignalingServer(server) {
           return (
             notificationClients.has(key) ||
             postsClients.has(key) ||
+            commentsClients.has(key) ||
             signalingClients.has(key)
           )
         }
@@ -1191,6 +1132,7 @@ function setupSignalingServer(server) {
           return (
             notificationClients.get(key) ||
             postsClients.get(key) ||
+            commentsClients.get(key) ||
             signalingClients.get(key)
           )
         }
@@ -1203,6 +1145,7 @@ function setupSignalingServer(server) {
   return {
     notificationClients,
     postsClients,
+    commentsClients,
     signalingClients,
     wsClients: wsClientsProxy, // For backward compatibility
   }
