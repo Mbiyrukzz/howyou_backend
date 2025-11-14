@@ -1,4 +1,4 @@
-// routes/commentRoutes.js - Nested Comments with WebSocket
+// routes/commentRoutes.js - Fixed WebSocket Broadcasting
 const { getCollections } = require('../db')
 const {
   uploadMultiple,
@@ -9,26 +9,41 @@ const { ObjectId } = require('mongodb')
 
 const SERVER_BASE_URL = process.env.SERVER_BASE_URL || 'http://localhost:5000'
 
-// Reuse broadcast helper (you can extract to utils if needed)
+// ✅ FIXED: Broadcast helper with better logging
 function broadcastToWebSocket(clients, message, excludeUserId = null) {
   if (!clients || typeof clients.forEach !== 'function') {
-    console.warn('WebSocket clients not available for broadcasting')
+    console.warn('⚠️ WebSocket clients not available for broadcasting')
     return
   }
 
+  console.log('📡 Broadcasting:', message.type, 'to /posts clients')
+  console.log('📊 Total clients:', clients.size)
+  console.log('🚫 Excluding:', excludeUserId)
+
   let broadcastCount = 0
   clients.forEach((client, userId) => {
+    console.log(
+      `  Checking client: ${userId}, readyState: ${
+        client.ws.readyState
+      }, exclude: ${userId === excludeUserId}`
+    )
+
     if (userId !== excludeUserId && client.ws.readyState === 1) {
       try {
         client.ws.send(JSON.stringify(message))
         broadcastCount++
+        console.log(`  ✅ Sent to ${userId}`)
       } catch (error) {
-        console.error(`Failed to send to ${userId}:`, error.message)
+        console.error(`  ❌ Failed to send to ${userId}:`, error.message)
       }
     }
   })
 
-  console.log(`Broadcasted ${message.type} to ${broadcastCount} users`)
+  console.log(
+    `✅ Broadcasted ${message.type} to ${broadcastCount} users (excluded ${
+      excludeUserId ? 1 : 0
+    })`
+  )
 }
 
 // CREATE Comment (or Reply)
@@ -41,6 +56,8 @@ const createCommentRoute = {
     console.log('Post ID:', req.params.postId)
     console.log('Parent Comment ID:', req.body.parentId || 'None (top-level)')
     console.log('User UID:', req.user?.uid)
+    console.log('Content:', req.body.content)
+    console.log('Files:', req.files?.length || 0)
 
     try {
       const { content, parentId } = req.body
@@ -59,6 +76,7 @@ const createCommentRoute = {
       // Validate post exists
       const post = await posts.findOne({ _id: new ObjectId(postId) })
       if (!post) {
+        console.error('❌ Post not found:', postId)
         return res.status(404).json({
           success: false,
           error: 'Post not found',
@@ -68,21 +86,35 @@ const createCommentRoute = {
       // Validate parent comment if provided
       let parentComment = null
       if (parentId) {
+        console.log('🔍 Looking for parent comment:', parentId)
         parentComment = await comments.findOne({
           _id: new ObjectId(parentId),
-          postId,
+          postId: new ObjectId(postId), // ✅ FIX: Ensure postId is ObjectId
         })
+
         if (!parentComment) {
+          console.error('❌ Parent comment not found:', parentId)
+          console.log('🔍 Checking all comments for this post...')
+          const allComments = await comments
+            .find({ postId: new ObjectId(postId) })
+            .toArray()
+          console.log(
+            'All comment IDs:',
+            allComments.map((c) => c._id.toString())
+          )
+
           return res.status(404).json({
             success: false,
             error: 'Parent comment not found',
           })
         }
+        console.log('✅ Parent comment found:', parentComment._id)
       }
 
       // Get user
       const user = await users.findOne({ firebaseUid: req.user.uid })
       if (!user) {
+        console.error('❌ User not found:', req.user.uid)
         return res.status(404).json({
           success: false,
           error: 'User not found',
@@ -103,7 +135,9 @@ const createCommentRoute = {
       })
 
       // Build comment
+      const newCommentId = new ObjectId()
       const newComment = {
+        _id: newCommentId,
         postId: new ObjectId(postId),
         userId: req.user.uid,
         username: user.name || 'User',
@@ -112,8 +146,8 @@ const createCommentRoute = {
         files: processedFiles,
         parentId: parentId ? new ObjectId(parentId) : null,
         path: parentComment
-          ? `${parentComment.path}.${new ObjectId()}`
-          : `${new ObjectId()}`, // For efficient threading
+          ? `${parentComment.path}.${newCommentId}`
+          : `${newCommentId}`, // For efficient threading
         likes: 0,
         likedBy: [],
         isLiked: false,
@@ -122,6 +156,8 @@ const createCommentRoute = {
       }
 
       const result = await comments.insertOne(newComment)
+      console.log('✅ Comment inserted:', result.insertedId)
+
       const createdComment = { ...newComment, _id: result.insertedId }
       createdComment.isLiked = false
 
@@ -131,29 +167,74 @@ const createCommentRoute = {
         { $inc: { comments: 1 }, $set: { updatedAt: new Date() } }
       )
 
-      // Broadcast
-      if (req.app.wsClients) {
+      // ✅ FIXED: Broadcast to /posts WebSocket clients
+      console.log('📡 Attempting WebSocket broadcast...')
+      console.log('WebSocket clients available:', !!req.app.postsClients)
+
+      if (req.app.postsClients) {
+        console.log('✅ postsClients found, broadcasting...')
         broadcastToWebSocket(
-          req.app.wsClients,
+          req.app.postsClients,
           {
             type: 'new-comment',
-            postId,
-            comment: createdComment,
+            postId: postId, // Keep as string for frontend
+            comment: {
+              ...createdComment,
+              _id: createdComment._id.toString(), // Convert ObjectId to string
+              postId: createdComment.postId.toString(),
+              parentId: createdComment.parentId
+                ? createdComment.parentId.toString()
+                : null,
+            },
             parentId: parentId || null,
             senderId: req.user.uid,
             timestamp: new Date().toISOString(),
           },
           req.user.uid
         )
+      } else if (req.app.wsClients) {
+        // Fallback to old wsClients
+        console.log('⚠️ Using fallback wsClients')
+        broadcastToWebSocket(
+          req.app.wsClients,
+          {
+            type: 'new-comment',
+            postId: postId,
+            comment: {
+              ...createdComment,
+              _id: createdComment._id.toString(),
+              postId: createdComment.postId.toString(),
+              parentId: createdComment.parentId
+                ? createdComment.parentId.toString()
+                : null,
+            },
+            parentId: parentId || null,
+            senderId: req.user.uid,
+            timestamp: new Date().toISOString(),
+          },
+          req.user.uid
+        )
+      } else {
+        console.error('❌ No WebSocket clients available!')
+      }
+
+      // Convert ObjectIds to strings for response
+      const responseComment = {
+        ...createdComment,
+        _id: createdComment._id.toString(),
+        postId: createdComment.postId.toString(),
+        parentId: createdComment.parentId
+          ? createdComment.parentId.toString()
+          : null,
       }
 
       res.status(201).json({
         success: true,
-        comment: createdComment,
+        comment: responseComment,
         message: 'Comment added',
       })
     } catch (err) {
-      console.error('Create comment error:', err)
+      console.error('❌ Create comment error:', err)
       res.status(500).json({
         success: false,
         error: 'Failed to create comment',
@@ -188,44 +269,45 @@ const getCommentsRoute = {
         .limit(parseInt(limit))
         .toArray()
 
-      const commentIds = topLevel.map((c) => c._id)
+      // Get all replies for these comments
+      const commentIds = topLevel.map((c) => c._id.toString())
 
-      // Get all replies in one query using path regex
       const allReplies = await comments
         .find({
           postId: new ObjectId(postId),
-          path: { $in: commentIds.map((id) => new RegExp(`^${id}`)) },
+          parentId: { $ne: null },
         })
         .toArray()
 
-      // Build tree structure
-      const replyMap = {}
-      allReplies.forEach((reply) => {
-        replyMap[reply._id.toString()] = { ...reply, replies: [] }
-      })
+      // Build nested structure
+      const buildRepliesTree = (parentId) => {
+        const parentIdStr = parentId.toString()
+        return allReplies
+          .filter(
+            (reply) =>
+              reply.parentId && reply.parentId.toString() === parentIdStr
+          )
+          .map((reply) => ({
+            ...reply,
+            _id: reply._id.toString(),
+            postId: reply.postId.toString(),
+            parentId: reply.parentId ? reply.parentId.toString() : null,
+            isLiked: reply.likedBy?.includes(userId) || false,
+            replies: buildRepliesTree(reply._id),
+          }))
+          .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
+      }
 
-      topLevel.forEach((comment) => {
-        const commentStrId = comment._id.toString()
-        comment.replies = []
-        comment.isLiked = comment.likedBy?.includes(userId) || false
-
-        allReplies.forEach((reply) => {
-          if (reply.path.startsWith(commentStrId + '.')) {
-            const replyObj = replyMap[reply._id.toString()]
-            replyObj.isLiked = reply.likedBy?.includes(userId) || false
-            comment.replies.push(replyObj)
-          }
-        })
-
-        // Sort replies by createdAt
-        comment.replies.sort((a, b) => a.createdAt - b.createdAt)
-      })
-
-      const finalComments = topLevel.map((c) => ({
-        ...c,
-        _id: c._id,
-        isLiked: c.isLiked,
+      const finalComments = topLevel.map((comment) => ({
+        ...comment,
+        _id: comment._id.toString(),
+        postId: comment.postId.toString(),
+        parentId: null,
+        isLiked: comment.likedBy?.includes(userId) || false,
+        replies: buildRepliesTree(comment._id),
       }))
+
+      console.log(`✅ Returning ${finalComments.length} top-level comments`)
 
       res.json({
         success: true,
@@ -234,7 +316,7 @@ const getCommentsRoute = {
         hasMore: topLevel.length === parseInt(limit),
       })
     } catch (err) {
-      console.error('Get comments error:', err)
+      console.error('❌ Get comments error:', err)
       res.status(500).json({
         success: false,
         error: 'Failed to fetch comments',
@@ -275,7 +357,16 @@ const updateCommentRoute = {
       const updatedComment = await comments.findOne({
         _id: new ObjectId(commentId),
       })
-      updatedComment.isLiked = updatedComment.likedBy?.includes(userId) || false
+
+      const responseComment = {
+        ...updatedComment,
+        _id: updatedComment._id.toString(),
+        postId: updatedComment.postId.toString(),
+        parentId: updatedComment.parentId
+          ? updatedComment.parentId.toString()
+          : null,
+        isLiked: updatedComment.likedBy?.includes(userId) || false,
+      }
 
       // Update post's updatedAt
       await posts.updateOne(
@@ -284,14 +375,14 @@ const updateCommentRoute = {
       )
 
       // Broadcast
-      if (req.app.wsClients) {
+      if (req.app.postsClients || req.app.wsClients) {
         broadcastToWebSocket(
-          req.app.wsClients,
+          req.app.postsClients || req.app.wsClients,
           {
             type: 'comment-updated',
-            commentId,
+            commentId: commentId,
             postId: comment.postId.toString(),
-            comment: updatedComment,
+            content: content?.trim(),
             senderId: userId,
             timestamp: new Date().toISOString(),
           },
@@ -301,7 +392,7 @@ const updateCommentRoute = {
 
       res.json({
         success: true,
-        comment: updatedComment,
+        comment: responseComment,
         message: 'Comment updated',
       })
     } catch (err) {
@@ -340,40 +431,20 @@ const deleteCommentRoute = {
         })
       }
 
-      // Delete all replies recursively
-      const deleteResult = await comments.deleteMany({
-        $or: [
-          { _id: new ObjectId(commentId) },
-          { path: new RegExp(`^${commentId}`) },
-        ],
-      })
-
-      // Delete associated files
-      const fs = require('fs').promises
-      const path = require('path')
-      const allDeleted = await comments
+      // Delete comment and all its replies
+      const commentIdStr = commentId
+      const allToDelete = await comments
         .find({
-          _id: { $in: [new ObjectId(commentId), ...deleteResult.deletedIds] },
+          $or: [
+            { _id: new ObjectId(commentId) },
+            { path: new RegExp(`${commentIdStr}`) },
+          ],
         })
         .toArray()
 
-      for (const c of allDeleted) {
-        if (c.files) {
-          for (const file of c.files) {
-            try {
-              const filePath = path.join(
-                __dirname,
-                '..',
-                'uploads',
-                file.filename
-              )
-              await fs.unlink(filePath)
-            } catch (err) {
-              console.warn('Could not delete file:', file.filename)
-            }
-          }
-        }
-      }
+      const deleteResult = await comments.deleteMany({
+        _id: { $in: allToDelete.map((c) => c._id) },
+      })
 
       // Update post comment count
       await posts.updateOne(
@@ -385,12 +456,12 @@ const deleteCommentRoute = {
       )
 
       // Broadcast
-      if (req.app.wsClients) {
+      if (req.app.postsClients || req.app.wsClients) {
         broadcastToWebSocket(
-          req.app.wsClients,
+          req.app.postsClients || req.app.wsClients,
           {
             type: 'comment-deleted',
-            commentId,
+            commentId: commentId,
             postId: comment.postId.toString(),
             replyCountDeleted: deleteResult.deletedCount - 1,
             senderId: userId,
@@ -445,7 +516,16 @@ const toggleLikeCommentRoute = {
       const updatedComment = await comments.findOne({
         _id: new ObjectId(commentId),
       })
-      updatedComment.isLiked = !hasLiked
+
+      const responseComment = {
+        ...updatedComment,
+        _id: updatedComment._id.toString(),
+        postId: updatedComment.postId.toString(),
+        parentId: updatedComment.parentId
+          ? updatedComment.parentId.toString()
+          : null,
+        isLiked: !hasLiked,
+      }
 
       // Update post timestamp
       await posts.updateOne(
@@ -454,15 +534,15 @@ const toggleLikeCommentRoute = {
       )
 
       // Broadcast
-      if (req.app.wsClients) {
+      if (req.app.postsClients || req.app.wsClients) {
         broadcastToWebSocket(
-          req.app.wsClients,
+          req.app.postsClients || req.app.wsClients,
           {
             type: hasLiked ? 'comment-unliked' : 'comment-liked',
-            commentId,
+            commentId: commentId,
             postId: comment.postId.toString(),
             userId,
-            newLikeCount: updatedComment.likes,
+            newLikeCount: responseComment.likes,
             timestamp: new Date().toISOString(),
           },
           userId
@@ -471,7 +551,7 @@ const toggleLikeCommentRoute = {
 
       res.json({
         success: true,
-        comment: updatedComment,
+        comment: responseComment,
         liked: !hasLiked,
       })
     } catch (err) {

@@ -39,6 +39,13 @@ const {
 
 const { updateLastSeenRoute } = require('./updateLastSeen')
 const { deleteMessageRoute } = require('./deleteMessageRoute')
+const {
+  createCommentRoute,
+  updateCommentRoute,
+  deleteCommentRoute,
+  getCommentsRoute,
+  toggleLikeCommentRoute,
+} = require('./commentsRoutes')
 
 const routes = [
   createUserRoute,
@@ -65,6 +72,13 @@ const routes = [
   getPostsRoute,
   updatePostRoute,
   deletePostRoute,
+
+  createCommentRoute,
+  updateCommentRoute,
+  deleteCommentRoute,
+  getCommentsRoute,
+
+  toggleLikeCommentRoute,
 
   toggleLikeRoute,
 

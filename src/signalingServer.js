@@ -315,6 +315,10 @@ function setupSignalingServer(server) {
 
         break
 
+      case 'end-call':
+        handleEndCall(senderId, data)
+        break
+
       // ===== MESSAGING =====
       case 'new-message':
         handleNewMessage(senderId, data)
@@ -336,7 +340,7 @@ function setupSignalingServer(server) {
         handleMessageRead(senderId, data)
         break
 
-      // ===== POSTS & STATUSES =====
+      // ===== POSTS & STATUSES & COMMENTS =====
       case 'new-post':
         handleNewPost(senderId, data)
         break
@@ -363,6 +367,26 @@ function setupSignalingServer(server) {
 
       case 'status-deleted':
         handleStatusDeleted(senderId, data)
+        break
+
+      case 'new-comment':
+        handleNewComment(senderId, data)
+        break
+
+      case 'comment-deleted':
+        handleCommentDeleted(senderId, data)
+        break
+
+      case 'comment-updated':
+        handleCommentUpdated(senderId, data)
+        break
+
+      case 'comment-liked':
+        handleCommentLiked(senderId, data)
+        break
+
+      case 'comment-unliked':
+        handleCommentUnliked(senderId, data)
         break
 
       // ===== TYPING INDICATORS =====
@@ -695,6 +719,94 @@ function setupSignalingServer(server) {
       {
         type: 'post-unliked',
         postId,
+        userId: senderId,
+        newLikeCount,
+        timestamp: new Date().toISOString(),
+      },
+      senderId
+    )
+  }
+
+  function handleNewComment(senderId, data) {
+    const { comment } = data
+
+    console.log(`💬 Broadcasting new comment from ${senderId}:`, comment._id)
+
+    broadcastToEndpoint(
+      '/posts',
+      {
+        type: 'new-comment',
+        comment,
+        userId: senderId,
+        timestamp: new Date().toISOString(),
+      },
+      senderId
+    )
+  }
+
+  function handleCommentDeleted(senderId, data) {
+    const { commentId } = data
+
+    console.log(`🗑️ Broadcasting comment deletion from ${senderId}:`, commentId)
+
+    broadcastToEndpoint(
+      '/posts',
+      {
+        type: 'comment-deleted',
+        commentId,
+        userId: senderId,
+        timestamp: new Date().toISOString(),
+      },
+      senderId
+    )
+  }
+
+  function handleCommentUpdated(senderId, data) {
+    const { commentId, comment } = data
+
+    console.log(`✏️ Broadcasting comment update from ${senderId}:`, commentId)
+
+    broadcastToEndpoint(
+      '/posts',
+      {
+        type: 'comment-updated',
+        commentId,
+        comment,
+        userId: senderId,
+        timestamp: new Date().toISOString(),
+      },
+      senderId
+    )
+  }
+
+  function handleCommentLiked(senderId, data) {
+    const { commentId, newLikeCount } = data
+
+    console.log(`❤️ Broadcasting comment like from ${senderId}:`, commentId)
+
+    broadcastToEndpoint(
+      '/posts',
+      {
+        type: 'comment-liked',
+        commentId,
+        userId: senderId,
+        newLikeCount,
+        timestamp: new Date().toISOString(),
+      },
+      senderId
+    )
+  }
+
+  function handleCommentUnliked(senderId, data) {
+    const { commentId, newLikeCount } = data
+
+    console.log(`💔 Broadcasting comment unlike from ${senderId}:`, commentId)
+
+    broadcastToEndpoint(
+      '/posts',
+      {
+        type: 'comment-unliked',
+        commentId,
         userId: senderId,
         newLikeCount,
         timestamp: new Date().toISOString(),
