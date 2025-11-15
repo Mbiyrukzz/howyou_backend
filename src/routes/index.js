@@ -46,6 +46,11 @@ const {
   getCommentsRoute,
   toggleLikeCommentRoute,
 } = require('./commentsRoutes')
+const {
+  markStatusViewedRoute,
+  getStatusViewsRoute,
+  getMyStatusViewsSummaryRoute,
+} = require('./statusViewRoutes')
 
 const routes = [
   createUserRoute,
@@ -66,6 +71,10 @@ const routes = [
   getStatusesRoute,
   deleteStatusRoute,
   getMyStatusRoute,
+
+  markStatusViewedRoute,
+  getStatusViewsRoute,
+  getMyStatusViewsSummaryRoute,
 
   createPostRoute,
   getPostRoute,

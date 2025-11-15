@@ -364,6 +364,13 @@ function setupSignalingServer(server) {
         handleStatusDeleted(senderId, data)
         break
 
+      case 'status-viewed':
+        // Handled via REST API now
+        console.log(
+          'ℹ️ Status viewed event received via WebSocket - no action taken'
+        )
+        break
+
       // ===== COMMENTS (NEW - routed to /comments endpoint) =====
       case 'new-comment':
         handleNewComment(senderId, data)
