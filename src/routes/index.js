@@ -50,6 +50,7 @@ const {
   markStatusViewedRoute,
   getStatusViewsRoute,
   getMyStatusViewsSummaryRoute,
+  hasViewedStatusRoute,
 } = require('./statusViewRoutes')
 
 const routes = [
@@ -75,6 +76,7 @@ const routes = [
   markStatusViewedRoute,
   getStatusViewsRoute,
   getMyStatusViewsSummaryRoute,
+  hasViewedStatusRoute,
 
   createPostRoute,
   getPostRoute,

@@ -226,6 +226,7 @@ function setupSignalingServer(server) {
 
     switch (data.type) {
       // ===== CALL SIGNALING =====
+
       case 'join-call':
         handleJoinCall(senderId, data)
         break
@@ -544,14 +545,49 @@ function setupSignalingServer(server) {
       callRooms.set(chatId, new Set())
     }
 
-    callRooms.get(chatId).add(userId)
-    console.log(`📞 User ${userId} joined call room: ${chatId}`)
+    const room = callRooms.get(chatId)
 
-    broadcastToRoom(chatId, userId, {
-      type: 'user-joined',
-      userId,
-      chatId,
-    })
+    // ✅ Get list of other users BEFORE adding this user
+    const otherUsers = Array.from(room).filter((id) => id !== userId)
+
+    // Add the user to the room
+    room.add(userId)
+    console.log(`📞 User ${userId} joined call room: ${chatId}`)
+    console.log(`📊 Other users in room:`, otherUsers)
+
+    // ✅ If there are other users, notify the joining user about them
+    if (otherUsers.length > 0) {
+      console.log(`📤 Notifying ${userId} about existing users:`, otherUsers)
+      otherUsers.forEach((existingUserId) => {
+        forwardToUser(
+          userId,
+          {
+            type: 'user-already-in-room',
+            userId: existingUserId,
+            chatId,
+          },
+          '/signaling'
+        )
+      })
+    }
+
+    // ✅ Broadcast to OTHER users that this user joined
+    if (otherUsers.length > 0) {
+      console.log(`📤 Broadcasting user-joined to other users:`, otherUsers)
+      otherUsers.forEach((existingUserId) => {
+        forwardToUser(
+          existingUserId,
+          {
+            type: 'user-joined',
+            userId,
+            chatId,
+          },
+          '/signaling'
+        )
+      })
+    }
+
+    console.log(`📊 Call room ${chatId} now has ${room.size} participants`)
   }
 
   function handleEndCall(userId, data) {
@@ -984,11 +1020,17 @@ function setupSignalingServer(server) {
       return
     }
 
+    let sentCount = 0
     room.forEach((userId) => {
       if (userId !== excludeUserId) {
-        forwardToUser(userId, message, '/notifications')
+        const sent = forwardToUser(userId, message, '/signaling')
+        if (sent) sentCount++
       }
     })
+
+    console.log(
+      `📡 Broadcast to room ${chatId}: ${sentCount}/${room.size - 1} sent`
+    )
   }
 
   function broadcastToChatMembers(chatId, excludeUserId, message) {

@@ -1,4 +1,3 @@
-// routes/statusViewRoutes.js - Track status views
 const { getCollections } = require('../db')
 const { verifyAuthToken } = require('../middleware/verifyAuthToken')
 const { ObjectId } = require('mongodb')
@@ -121,10 +120,11 @@ const markStatusViewedRoute = {
         _id: new ObjectId(statusId),
       })
 
-      // ✅ Broadcast view event to status owner
-      if (req.app.wsClients) {
+      // ✅ Broadcast view event to status owner (via /posts endpoint)
+      if (req.app.postsClients || req.app.wsClients) {
+        const clients = req.app.postsClients || req.app.wsClients
         broadcastToWebSocket(
-          req.app.wsClients,
+          clients,
           {
             type: 'status-viewed',
             statusId,
@@ -147,6 +147,7 @@ const markStatusViewedRoute = {
       res.json({
         success: true,
         viewCount: updatedStatus.views?.length || 0,
+        hasViewed: true, // ✅ NEW: Return this for frontend
       })
     } catch (err) {
       console.error('❌ Mark status viewed error:', err)
@@ -154,6 +155,36 @@ const markStatusViewedRoute = {
         success: false,
         error: 'Failed to mark status as viewed',
         details: err.message,
+      })
+    }
+  },
+}
+
+// ✅ NEW: GET /status/:statusId/has-viewed - Check if current user has viewed
+const hasViewedStatusRoute = {
+  path: '/status/:statusId/has-viewed',
+  method: 'get',
+  middleware: [verifyAuthToken],
+  handler: async (req, res) => {
+    try {
+      const { statuses } = getCollections()
+      const statusId = req.params.statusId
+      const viewerId = req.user.uid
+
+      const status = await statuses.findOne({
+        _id: new ObjectId(statusId),
+        'views.userId': viewerId,
+      })
+
+      res.json({
+        success: true,
+        hasViewed: !!status,
+      })
+    } catch (err) {
+      console.error('❌ Check viewed status error:', err)
+      res.status(500).json({
+        success: false,
+        error: 'Failed to check viewed status',
       })
     }
   },
@@ -272,4 +303,5 @@ module.exports = {
   markStatusViewedRoute,
   getStatusViewsRoute,
   getMyStatusViewsSummaryRoute,
+  hasViewedStatusRoute,
 }

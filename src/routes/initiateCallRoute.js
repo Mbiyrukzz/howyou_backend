@@ -265,7 +265,6 @@ const answerCallRoute = {
         })
       }
 
-      // Get recipient info for notification
       const recipient = await users.findOne({ firebaseUid: req.user.uid })
       const recipientName =
         recipient?.name || req.user.displayName || req.user.email || 'Unknown'
@@ -278,12 +277,13 @@ const answerCallRoute = {
       if (accepted) {
         updateData.actualStartTime = new Date()
 
-        // ✅ CRITICAL: Send to SIGNALING endpoint for WebRTC coordination
+        // ✅ Send to SIGNALING endpoint
         const acceptNotificationSent = sendToUserOnEndpoint(
           call.callerId,
           {
             type: 'call_accepted',
             callId: callId,
+            from: req.user.uid, // ✅ Add from field
             recipientId: req.user.uid,
             recipientName: recipientName,
             chatId: call.chatId.toString(),
@@ -302,18 +302,20 @@ const answerCallRoute = {
           {
             type: 'call_accepted',
             callId: callId,
+            from: req.user.uid,
             recipientName: recipientName,
             timestamp: new Date().toISOString(),
           },
           'notifications'
         )
       } else {
-        // ✅ Send rejection to both endpoints
-        const rejectNotificationSent = sendToUserOnEndpoint(
+        // Send rejection
+        sendToUserOnEndpoint(
           call.callerId,
           {
             type: 'call_rejected',
             callId: callId,
+            from: req.user.uid,
             recipientId: req.user.uid,
             recipientName: recipientName,
             timestamp: new Date().toISOString(),
@@ -332,11 +334,6 @@ const answerCallRoute = {
           'notifications'
         )
 
-        console.log(
-          `✅ Call rejected notification sent: ${rejectNotificationSent}`
-        )
-
-        // Send missed call notification
         await sendMissedCallNotification(
           call.callerId,
           recipientName,
