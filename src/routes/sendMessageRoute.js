@@ -1,3 +1,4 @@
+// backend/routes/sendMessage.js - FIXED VERSION
 const { getCollections } = require('../db')
 const {
   uploadMultiple,
@@ -101,16 +102,21 @@ const sendMessageRoute = {
         }
       }
 
-      // Create message document
+      // ✅ FIX: Create the message object correctly
       const newMessage = {
         chatId: new ObjectId(chatId),
         senderId: req.user.uid,
         content: hasContent ? content.trim() : '',
         type: finalMessageType,
+        status: 'sent', // ✅ Add initial status
+        sentAt: new Date(),
+        deliveredBy: [], // ✅ Track who received it
+        readBy: [], // ✅ Track who read it
         createdAt: new Date(),
+        updatedAt: new Date(),
       }
 
-      // Only add files array if there are files
+      // ✅ Only add files array if there are files
       if (fileInfoArray.length > 0) {
         newMessage.files = fileInfoArray
       }

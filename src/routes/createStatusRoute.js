@@ -6,7 +6,8 @@ const {
 } = require('../middleware/createUploadsDir')
 const { verifyAuthToken } = require('../middleware/verifyAuthToken')
 
-const SERVER_BASE_URL = process.env.SERVER_BASE_URL || 'http://localhost:5000'
+const SERVER_BASE_URL =
+  process.env.SERVER_BASE_URL || 'http://10.230.214.87:5000'
 const MAX_STATUSES_PER_DAY = 5
 
 // ✅ Helper function to broadcast to WebSocket clients

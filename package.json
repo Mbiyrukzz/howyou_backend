@@ -22,6 +22,7 @@
   },
   "dependencies": {
     "expo-server-sdk": "^4.0.0",
+    "expo-video": "^3.0.14",
     "firebase-admin": "^13.5.0"
   }
 }
