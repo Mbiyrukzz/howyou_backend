@@ -1,4 +1,3 @@
-// backend/routes/sendMessage.js - FIXED VERSION
 const { getCollections } = require('../db')
 const {
   uploadMultiple,
@@ -17,14 +16,6 @@ const sendMessageRoute = {
     console.log('=== Send Message Request ===')
     console.log('Body:', req.body)
     console.log('Files received:', req.files?.length || 0)
-    if (req.files?.length > 0) {
-      console.log('First file details:', {
-        filename: req.files[0].filename,
-        mimetype: req.files[0].mimetype,
-        size: req.files[0].size,
-        path: req.files[0].path,
-      })
-    }
 
     try {
       const { chatId, content, messageType } = req.body
@@ -38,7 +29,7 @@ const sendMessageRoute = {
         })
       }
 
-      // Check if message has content or files
+      // ✅ FIX: Allow empty content if files are present
       const hasContent = content && content.trim().length > 0
       const hasFiles = files.length > 0
 
@@ -69,12 +60,11 @@ const sendMessageRoute = {
       if (hasFiles) {
         fileInfoArray = files.map((file) => {
           const info = getFileInfo(file)
-          // Construct the full URL
           const fullUrl = `${SERVER_BASE_URL}${info.url}`
 
-          console.log('File info generated:', {
+          console.log('File processed:', {
             originalName: info.originalName,
-            filename: info.filename,
+            type: info.type,
             url: fullUrl,
           })
 
@@ -87,7 +77,6 @@ const sendMessageRoute = {
             type: info.type,
           }
         })
-        console.log('Processed files:', fileInfoArray)
       }
 
       // Determine message type
@@ -102,28 +91,29 @@ const sendMessageRoute = {
         }
       }
 
-      // ✅ FIX: Create the message object correctly
+      // ✅ Create the message object with status fields
       const newMessage = {
         chatId: new ObjectId(chatId),
         senderId: req.user.uid,
-        content: hasContent ? content.trim() : '',
+        content: hasContent ? content.trim() : '', // ✅ Allow empty content
         type: finalMessageType,
-        status: 'sent', // ✅ Add initial status
+        status: 'sent',
         sentAt: new Date(),
-        deliveredBy: [], // ✅ Track who received it
-        readBy: [], // ✅ Track who read it
+        deliveredBy: [],
+        readBy: [],
         createdAt: new Date(),
         updatedAt: new Date(),
       }
 
-      // ✅ Only add files array if there are files
+      // Only add files array if there are files
       if (fileInfoArray.length > 0) {
         newMessage.files = fileInfoArray
       }
 
       console.log('Creating message:', {
-        ...newMessage,
-        files: newMessage.files?.map((f) => ({ url: f.url, type: f.type })),
+        type: newMessage.type,
+        hasContent: !!newMessage.content,
+        filesCount: newMessage.files?.length || 0,
       })
 
       const result = await messages.insertOne(newMessage)
@@ -153,11 +143,7 @@ const sendMessageRoute = {
         _id: result.insertedId,
       }
 
-      console.log('✅ Message created successfully with ID:', result.insertedId)
-      console.log(
-        'File URLs in response:',
-        createdMessage.files?.map((f) => f.url)
-      )
+      console.log('✅ Message created successfully:', result.insertedId)
 
       res.json({
         success: true,

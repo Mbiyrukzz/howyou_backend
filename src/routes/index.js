@@ -52,6 +52,7 @@ const {
   getMyStatusViewsSummaryRoute,
   hasViewedStatusRoute,
 } = require('./statusViewRoutes')
+const { deleteCallLogRoute } = require('./deleteCallLog')
 
 const routes = [
   createUserRoute,
@@ -101,6 +102,7 @@ const routes = [
   endCallRoute,
   cancelCallRoute,
   getCallHistoryRoute,
+  deleteCallLogRoute,
 
   savePushTokenRoute,
   getPushTokenRoute,

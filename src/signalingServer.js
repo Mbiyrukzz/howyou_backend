@@ -329,10 +329,12 @@ function setupSignalingServer(server) {
         break
 
       case 'message-delivered':
+        // ✅ NEW: Extract and forward delivery notification
         handleMessageDelivered(senderId, data)
         break
 
       case 'message-read':
+        // ✅ NEW: Extract and forward read notification
         handleMessageRead(senderId, data)
         break
 
@@ -657,29 +659,54 @@ function setupSignalingServer(server) {
   }
 
   function handleMessageDelivered(userId, data) {
-    const { messageId, chatId, senderId } = data
+    const { messageIds, chatId, senderId } = data
 
-    forwardToUser(
+    console.log(`📬 Message(s) delivered by ${userId}:`, {
+      messageIds,
+      chatId,
       senderId,
-      {
-        type: 'message-delivered',
-        messageId,
-        chatId,
-        deliveredBy: userId,
-        timestamp: new Date().toISOString(),
-      },
-      '/notifications'
-    )
+    })
+
+    // ✅ Handle both single messageId and array of messageIds
+    const ids = Array.isArray(messageIds) ? messageIds : [messageIds]
+
+    // ✅ Forward each message delivery status to the sender
+    ids.forEach((messageId) => {
+      console.log(`📬 Forwarding delivery status for message ${messageId}`)
+
+      forwardToUser(
+        senderId,
+        {
+          type: 'message-delivered',
+          messageId,
+          chatId,
+          deliveredBy: userId,
+          timestamp: new Date().toISOString(),
+        },
+        '/notifications'
+      )
+    })
   }
 
+  // ✅ FIXED: Handle multiple messages being read
   function handleMessageRead(userId, data) {
-    const { messageId, chatId, senderId } = data
+    const { messageIds, chatId, senderId } = data
 
+    console.log(`👁️ Message(s) read by ${userId}:`, {
+      messageIds,
+      chatId,
+      senderId,
+    })
+
+    // ✅ Handle both single messageId and array of messageIds
+    const ids = Array.isArray(messageIds) ? messageIds : [messageIds]
+
+    // ✅ Send batch notification to sender about ALL read messages
     forwardToUser(
       senderId,
       {
         type: 'message-read',
-        messageId,
+        messageIds: ids, // ✅ Send as array
         chatId,
         readBy: userId,
         timestamp: new Date().toISOString(),

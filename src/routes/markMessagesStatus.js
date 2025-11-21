@@ -1,4 +1,5 @@
-// backend/routes/messageStatus.js - FIXED VERSION
+// backend/routes/messageStatus.js - CORRECTED VERSION
+// ✅ NO require of signalingServer - use req.app.wsClients instead!
 
 const { getCollections } = require('../db')
 const { verifyAuthToken } = require('../middleware/verifyAuthToken')
@@ -16,7 +17,7 @@ const markMessagesAsDeliveredRoute = {
 
     console.log('📬 Mark delivered request:', {
       chatId,
-      messageIds,
+      count: messageIds?.length,
       userId,
     })
 
@@ -28,9 +29,10 @@ const markMessagesAsDeliveredRoute = {
       })
 
       if (!chat) {
-        return res
-          .status(403)
-          .json({ success: false, error: 'Access denied to this chat' })
+        return res.status(403).json({
+          success: false,
+          error: 'Access denied',
+        })
       }
 
       // Convert string IDs to ObjectIds
@@ -45,13 +47,17 @@ const markMessagesAsDeliveredRoute = {
         })
         .filter(Boolean)
 
-      // Update messages to delivered status
+      if (objectIds.length === 0) {
+        return res.json({ success: true, modifiedCount: 0 })
+      }
+
+      // Update messages
       const result = await messages.updateMany(
         {
           chatId: new ObjectId(chatId),
           _id: { $in: objectIds },
           senderId: { $ne: userId },
-          status: { $in: ['sent', null] },
+          deliveredBy: { $ne: userId },
         },
         {
           $set: {
@@ -62,80 +68,79 @@ const markMessagesAsDeliveredRoute = {
         }
       )
 
-      console.log('📬 Updated count:', result.modifiedCount)
+      console.log('📬 Updated:', result.modifiedCount, 'messages')
 
       // Get updated messages
       const updatedMessages = await messages
-        .find({
-          _id: { $in: objectIds },
-        })
+        .find({ _id: { $in: objectIds } })
         .toArray()
 
-      console.log('📬 Found messages:', updatedMessages.length)
+      console.log(
+        '📬 Found',
+        updatedMessages.length,
+        'messages to notify about'
+      )
 
-      // Get signalingServer properly
-      let signalingServerModule
-      try {
-        signalingServerModule = require('../signalingServer')
-      } catch (err) {
-        console.error('❌ Could not load signalingServer module:', err)
-      }
+      // ✅ CRITICAL FIX: Use req.app.wsClients instead of require
+      const wsClients = req.app.wsClients || global.wsClients
 
-      // ✅ FIX: Send individual notifications for EACH message to its sender
-      if (signalingServerModule?.notificationClients) {
-        const { notificationClients } = signalingServerModule
+      if (!wsClients) {
+        console.error('❌ WebSocket clients not available!')
+      } else {
+        console.log('✅ WebSocket clients available, size:', wsClients.size)
 
+        // Send WebSocket notifications to each message sender
         updatedMessages.forEach((msg) => {
           const senderId = msg.senderId
-          const messageId = msg._id.toString()
+          console.log(`📬 Looking for sender: ${senderId}`)
 
-          console.log(
-            '📬 Attempting to notify sender:',
-            senderId,
-            'for message:',
-            messageId
-          )
+          const client = wsClients.get(senderId)
 
-          const client = notificationClients.get(senderId)
-          if (client && client.ws.readyState === 1) {
-            try {
-              client.ws.send(
-                JSON.stringify({
-                  type: 'message-delivered', // ✅ Matches frontend handler
-                  chatId,
-                  messageId, // ✅ Single messageId, not array
-                  deliveredBy: userId,
-                  timestamp: new Date().toISOString(),
-                })
-              )
-              console.log(
-                '✅ Sent delivery notification to:',
-                senderId,
-                'for message:',
-                messageId
-              )
-            } catch (err) {
-              console.error('❌ Failed to send notification:', err)
-            }
-          } else {
-            console.log(
-              '⚠️ Client not connected:',
-              senderId,
-              'readyState:',
-              client?.ws?.readyState
+          if (!client) {
+            console.warn(`⚠️ Sender ${senderId} not connected via WebSocket`)
+            return
+          }
+
+          if (client.ws.readyState !== 1) {
+            console.warn(
+              `⚠️ Sender ${senderId} socket not ready (state: ${client.ws.readyState})`
             )
+            return
+          }
+
+          try {
+            const notification = {
+              type: 'message-delivered',
+              chatId,
+              messageId: msg._id.toString(),
+              deliveredBy: userId,
+              timestamp: new Date().toISOString(),
+            }
+
+            console.log('📤 Sending notification:', notification)
+            client.ws.send(JSON.stringify(notification))
+            console.log(
+              '✅ Notified sender:',
+              senderId,
+              'about message',
+              msg._id
+            )
+          } catch (err) {
+            console.error(`❌ Failed to notify ${senderId}:`, err.message)
           }
         })
-      } else {
-        console.error('❌ notificationClients not available')
       }
 
-      res.json({ success: true, modifiedCount: result.modifiedCount })
+      res.json({
+        success: true,
+        modifiedCount: result.modifiedCount,
+      })
     } catch (err) {
-      console.error('❌ Error marking messages as delivered:', err)
-      res
-        .status(500)
-        .json({ success: false, error: 'Failed to mark messages as delivered' })
+      console.error('❌ Error marking delivered:', err)
+      res.status(500).json({
+        success: false,
+        error: 'Failed to mark messages as delivered',
+      })
     }
   },
 }
@@ -152,7 +157,7 @@ const markMessagesAsReadRoute = {
 
     console.log('👁️ Mark read request:', {
       chatId,
-      messageIds,
+      count: messageIds?.length,
       userId,
     })
 
@@ -164,9 +169,10 @@ const markMessagesAsReadRoute = {
       })
 
       if (!chat) {
-        return res
-          .status(403)
-          .json({ success: false, error: 'Access denied to this chat' })
+        return res.status(403).json({
+          success: false,
+          error: 'Access denied',
+        })
       }
 
       // Build query
@@ -176,23 +182,24 @@ const markMessagesAsReadRoute = {
         readBy: { $ne: userId },
       }
 
-      // If specific message IDs provided, add to query
+      // Add specific message IDs if provided
       if (messageIds && Array.isArray(messageIds) && messageIds.length > 0) {
         const objectIds = messageIds
           .map((id) => {
             try {
               return new ObjectId(id)
             } catch (e) {
-              console.error('Invalid message ID:', id)
               return null
             }
           })
           .filter(Boolean)
 
-        query._id = { $in: objectIds }
+        if (objectIds.length > 0) {
+          query._id = { $in: objectIds }
+        }
       }
 
-      // Update messages to read status
+      // Update messages
       const result = await messages.updateMany(query, {
         $set: {
           status: 'read',
@@ -201,76 +208,80 @@ const markMessagesAsReadRoute = {
         $addToSet: { readBy: userId },
       })
 
-      console.log('👁️ Updated count:', result.modifiedCount)
+      console.log('👁️ Updated:', result.modifiedCount, 'messages')
 
       // Get updated messages
-      const updatedMessages = await messages
-        .find({
-          chatId: new ObjectId(chatId),
-          readBy: userId,
-          senderId: { $ne: userId },
-        })
-        .toArray()
+      const updatedMessages = await messages.find(query).toArray()
 
-      console.log('👁️ Found messages:', updatedMessages.length)
+      console.log(
+        '👁️ Found',
+        updatedMessages.length,
+        'messages to notify about'
+      )
 
-      // Get signalingServer properly
-      let signalingServerModule
-      try {
-        signalingServerModule = require('../signalingServer')
-      } catch (err) {
-        console.error('❌ Could not load signalingServer module:', err)
-      }
+      // ✅ CRITICAL FIX: Use req.app.wsClients instead of require
+      const wsClients = req.app.wsClients || global.wsClients
 
-      // ✅ FIX: Group messages by sender and send one notification per sender
-      if (signalingServerModule?.notificationClients) {
-        const { notificationClients } = signalingServerModule
+      if (!wsClients) {
+        console.error('❌ WebSocket clients not available!')
+      } else {
+        console.log('✅ WebSocket clients available, size:', wsClients.size)
 
         // Group messages by sender
-        const messageBySender = {}
+        const messagesBySender = {}
         updatedMessages.forEach((msg) => {
-          if (!messageBySender[msg.senderId]) {
-            messageBySender[msg.senderId] = []
+          if (!messagesBySender[msg.senderId]) {
+            messagesBySender[msg.senderId] = []
           }
-          messageBySender[msg.senderId].push(msg._id.toString())
+          messagesBySender[msg.senderId].push(msg._id.toString())
         })
 
-        console.log('👁️ Notifying senders:', Object.keys(messageBySender))
+        console.log(
+          '👁️ Notifying',
+          Object.keys(messagesBySender).length,
+          'senders'
+        )
 
-        // Send notifications to each sender
-        Object.entries(messageBySender).forEach(([senderId, msgIds]) => {
-          const client = notificationClients.get(senderId)
-          if (client && client.ws.readyState === 1) {
-            try {
-              client.ws.send(
-                JSON.stringify({
-                  type: 'message-read', // ✅ Matches frontend handler
-                  chatId,
-                  messageIds: msgIds, // ✅ Array of message IDs
-                  readBy: userId,
-                  timestamp: new Date().toISOString(),
-                })
-              )
-              console.log(
-                '✅ Sent read notification to:',
-                senderId,
-                msgIds.length,
-                'messages'
-              )
-            } catch (err) {
-              console.error('❌ Failed to send notification:', err)
-            }
-          } else {
-            console.log(
-              '⚠️ Client not connected:',
-              senderId,
-              'readyState:',
-              client?.ws?.readyState
+        // Notify each sender
+        Object.entries(messagesBySender).forEach(([senderId, msgIds]) => {
+          console.log(`👁️ Looking for sender: ${senderId}`)
+
+          const client = wsClients.get(senderId)
+
+          if (!client) {
+            console.warn(`⚠️ Sender ${senderId} not connected via WebSocket`)
+            return
+          }
+
+          if (client.ws.readyState !== 1) {
+            console.warn(
+              `⚠️ Sender ${senderId} socket not ready (state: ${client.ws.readyState})`
             )
+            return
+          }
+
+          try {
+            const notification = {
+              type: 'message-read',
+              chatId,
+              messageIds: msgIds,
+              readBy: userId,
+              timestamp: new Date().toISOString(),
+            }
+
+            console.log('📤 Sending notification:', notification)
+            client.ws.send(JSON.stringify(notification))
+            console.log(
+              '✅ Notified sender:',
+              senderId,
+              'about',
+              msgIds.length,
+              'messages'
+            )
+          } catch (err) {
+            console.error(`❌ Failed to notify ${senderId}:`, err.message)
           }
         })
-      } else {
-        console.error('❌ notificationClients not available')
       }
 
       res.json({
@@ -279,12 +290,16 @@ const markMessagesAsReadRoute = {
         messageIds: updatedMessages.map((msg) => msg._id.toString()),
       })
     } catch (err) {
-      console.error('❌ Error marking messages as read:', err)
-      res
-        .status(500)
-        .json({ success: false, error: 'Failed to mark messages as read' })
+      console.error('❌ Error marking read:', err)
+      res.status(500).json({
+        success: false,
+        error: 'Failed to mark messages as read',
+      })
     }
   },
 }
 
-module.exports = { markMessagesAsDeliveredRoute, markMessagesAsReadRoute }
+module.exports = {
+  markMessagesAsDeliveredRoute,
+  markMessagesAsReadRoute,
+}
