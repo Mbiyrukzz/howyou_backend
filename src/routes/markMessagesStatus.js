@@ -159,6 +159,7 @@ const markMessagesAsReadRoute = {
       chatId,
       count: messageIds?.length,
       userId,
+      messageIds,
     })
 
     try {
@@ -178,17 +179,21 @@ const markMessagesAsReadRoute = {
       // Build query
       const query = {
         chatId: new ObjectId(chatId),
-        senderId: { $ne: userId },
-        readBy: { $ne: userId },
+        senderId: { $ne: userId }, // ✅ NOT sent by current user
+        readBy: { $ne: userId }, // ✅ NOT already read by current user
       }
+
+      // ✅ CRITICAL FIX: Declare objectIds BEFORE using it
+      let objectIds = []
 
       // Add specific message IDs if provided
       if (messageIds && Array.isArray(messageIds) && messageIds.length > 0) {
-        const objectIds = messageIds
+        objectIds = messageIds
           .map((id) => {
             try {
               return new ObjectId(id)
             } catch (e) {
+              console.error('Invalid ObjectId:', id)
               return null
             }
           })
@@ -198,6 +203,9 @@ const markMessagesAsReadRoute = {
           query._id = { $in: objectIds }
         }
       }
+
+      console.log('👁️ Query:', JSON.stringify(query))
+      console.log('👁️ ObjectIds count:', objectIds.length)
 
       // Update messages
       const result = await messages.updateMany(query, {
@@ -210,8 +218,13 @@ const markMessagesAsReadRoute = {
 
       console.log('👁️ Updated:', result.modifiedCount, 'messages')
 
-      // Get updated messages
-      const updatedMessages = await messages.find(query).toArray()
+      // ✅ Get updated messages to notify senders
+      const updatedMessages = await messages
+        .find({
+          _id: { $in: objectIds },
+          senderId: { $ne: userId },
+        })
+        .toArray()
 
       console.log(
         '👁️ Found',
@@ -219,7 +232,7 @@ const markMessagesAsReadRoute = {
         'messages to notify about'
       )
 
-      // ✅ CRITICAL FIX: Use req.app.wsClients instead of require
+      // ✅ Use req.app.wsClients instead of require
       const wsClients = req.app.wsClients || global.wsClients
 
       if (!wsClients) {
@@ -230,10 +243,11 @@ const markMessagesAsReadRoute = {
         // Group messages by sender
         const messagesBySender = {}
         updatedMessages.forEach((msg) => {
-          if (!messagesBySender[msg.senderId]) {
-            messagesBySender[msg.senderId] = []
+          const senderId = msg.senderId
+          if (!messagesBySender[senderId]) {
+            messagesBySender[senderId] = []
           }
-          messagesBySender[msg.senderId].push(msg._id.toString())
+          messagesBySender[senderId].push(msg._id.toString())
         })
 
         console.log(
@@ -264,7 +278,7 @@ const markMessagesAsReadRoute = {
             const notification = {
               type: 'message-read',
               chatId,
-              messageIds: msgIds,
+              messageIds: msgIds, // ✅ Array of message IDs
               readBy: userId,
               timestamp: new Date().toISOString(),
             }
