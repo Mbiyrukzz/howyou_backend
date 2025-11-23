@@ -1,5 +1,5 @@
 // ============================================================================
-// CREATE CHAT ROUTE (create-chat.js)
+// CREATE CHAT ROUTE (create-chat.js) - WITH REAL-TIME BROADCASTING
 // ============================================================================
 const { getCollections } = require('../db')
 const { updateLastSeen } = require('../middleware/updateLastSeen')
@@ -64,19 +64,40 @@ const createChatRoute = {
             success: true,
             chat: existingChat,
             message: 'Chat already exists',
+            isExisting: true, // ✅ Flag to indicate this is not a new chat
           })
+        }
+      }
+
+      // ✅ Fetch participant details for real-time broadcast
+      const participantDetails = {}
+      for (const participantId of finalParticipants) {
+        const participantUser = await users.findOne({
+          firebaseUid: participantId,
+        })
+        if (participantUser) {
+          participantDetails[participantId] = {
+            _id: participantUser._id,
+            firebaseUid: participantUser.firebaseUid,
+            name: participantUser.name,
+            displayName: participantUser.displayName,
+            photoURL: participantUser.photoURL,
+            online: participantUser.online || false,
+          }
         }
       }
 
       // ✅ Create new chat
       const newChat = {
         participants: finalParticipants,
+        participantDetails, // ✅ Include participant info for immediate display
         name: name || null, // Name is optional for 1-on-1, required for groups
         createdBy: currentUserId,
         createdAt: new Date(),
         lastActivity: new Date(),
         lastMessage: null,
         isGroup, // Only true if more than 2 participants
+        unreadCount: 0,
       }
 
       const result = await chats.insertOne(newChat)
@@ -88,10 +109,49 @@ const createChatRoute = {
         participantCount: finalParticipants.length,
       })
 
+      // ✅ REAL-TIME: Broadcast new chat to all participants via WebSocket
+      const wsClients = req.app.get('wsClients')
+      if (wsClients) {
+        console.log(
+          '📡 Broadcasting new chat to participants:',
+          finalParticipants
+        )
+
+        finalParticipants.forEach((participantId) => {
+          // Don't send to the creator - they'll get it in the response
+          if (participantId === currentUserId) return
+
+          const client = wsClients.get(participantId)
+          if (client && client.ws.readyState === 1) {
+            try {
+              client.ws.send(
+                JSON.stringify({
+                  type: 'new-chat',
+                  chat: createdChat,
+                  createdBy: currentUserId,
+                  timestamp: new Date().toISOString(),
+                })
+              )
+              console.log(`✅ Sent new-chat notification to ${participantId}`)
+            } catch (err) {
+              console.error(
+                `❌ Failed to send new-chat to ${participantId}:`,
+                err.message
+              )
+            }
+          } else {
+            console.log(`⚠️ User ${participantId} not connected`)
+          }
+        })
+      } else {
+        console.warn('⚠️ WebSocket clients not available')
+      }
+
       res.json({
         success: true,
         chat: createdChat,
         message: 'Chat created successfully',
+        isExisting: false,
       })
     } catch (err) {
       console.error('❌ Error creating chat:', err)

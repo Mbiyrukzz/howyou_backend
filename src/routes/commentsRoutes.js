@@ -7,8 +7,7 @@ const {
 const { verifyAuthToken } = require('../middleware/verifyAuthToken')
 const { ObjectId } = require('mongodb')
 
-const SERVER_BASE_URL =
-  process.env.SERVER_BASE_URL || 'http://10.230.214.87:5000'
+const SERVER_BASE_URL = process.env.SERVER_BASE_URL || 'http://10.197.1.87:5000'
 
 // ✅ FIXED: Broadcast helper with better logging
 function broadcastToWebSocket(clients, message, excludeUserId = null) {

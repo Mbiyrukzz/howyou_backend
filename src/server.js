@@ -103,7 +103,7 @@ const startServer = async () => {
           filesCount: files.length,
           files: files.slice(0, 10), // Show first 10 files
           sampleUrl: files[0]
-            ? `http://10.230.214.87:5000/uploads/images/${files[0]}`
+            ? `http://10.197.1.87:5000/uploads/images/${files[0]}`
             : 'No files',
         })
       } catch (err) {

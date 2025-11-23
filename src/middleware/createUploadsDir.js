@@ -51,8 +51,7 @@ const storage = multer.diskStorage({
   },
 })
 
-// File filter function
-// File filter function
+
 const fileFilter = (req, file, cb) => {
   // Allowed file types
   const allowedTypes = {
@@ -67,6 +66,8 @@ const fileFilter = (req, file, cb) => {
       'audio/x-m4a',
       'audio/mp4a-latm',
       'audio/aac',
+      'audio/mp3',
+      'audio/webm',
     ],
     document: [
       'application/pdf',

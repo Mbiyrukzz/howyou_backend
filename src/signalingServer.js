@@ -315,6 +315,15 @@ function setupSignalingServer(server) {
         handleEndCall(senderId, data)
         break
 
+      // ===== CHAT MANAGEMENT =====
+      case 'new-chat':
+        handleNewChat(senderId, data)
+        break
+
+      case 'chat-deleted':
+        handleChatDeleted(senderId, data)
+        break
+
       // ===== MESSAGING =====
       case 'new-message':
         handleNewMessage(senderId, data)
@@ -626,6 +635,60 @@ function setupSignalingServer(server) {
         callRooms.delete(chatId)
       }
     }
+  }
+
+  function handleNewChat(senderId, data) {
+    const { chat, participants } = data
+
+    console.log(`💬 Broadcasting new chat from ${senderId}:`, chat._id)
+
+    if (!participants || !Array.isArray(participants)) {
+      console.error('❌ Invalid participants list for new chat')
+      return
+    }
+
+    // Broadcast to all participants except the creator
+    participants.forEach((participantId) => {
+      if (String(participantId) !== String(senderId)) {
+        forwardToUser(
+          String(participantId),
+          {
+            type: 'new-chat',
+            chat,
+            createdBy: senderId,
+            timestamp: new Date().toISOString(),
+          },
+          '/notifications'
+        )
+      }
+    })
+  }
+
+  function handleChatDeleted(senderId, data) {
+    const { chatId, participants } = data
+
+    console.log(`🗑️ Broadcasting chat deletion from ${senderId}:`, chatId)
+
+    if (!participants || !Array.isArray(participants)) {
+      console.error('❌ Invalid participants list for chat deletion')
+      return
+    }
+
+    // Notify all participants
+    participants.forEach((participantId) => {
+      if (String(participantId) !== String(senderId)) {
+        forwardToUser(
+          String(participantId),
+          {
+            type: 'chat-deleted',
+            chatId,
+            deletedBy: senderId,
+            timestamp: new Date().toISOString(),
+          },
+          '/notifications'
+        )
+      }
+    })
   }
 
   // ===== MESSAGE HANDLERS =====
