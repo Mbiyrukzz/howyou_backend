@@ -9,7 +9,8 @@ const ffmpeg = require('fluent-ffmpeg')
 const path = require('path')
 const fs = require('fs')
 
-const SERVER_BASE_URL = process.env.SERVER_BASE_URL || 'http://10.219.2.87:5000'
+const SERVER_BASE_URL =
+  process.env.SERVER_BASE_URL || 'http://10.102.223.87:5000'
 
 // ✅ Convert audio files to MP3 for universal compatibility
 const convertAudioToMp3 = (inputPath, outputPath) => {
@@ -148,7 +149,7 @@ const sendMessageRoute = {
                 mimetype: 'audio/mpeg',
                 size: stats.size,
                 type: 'audio',
-                url: `/uploads/${mp3Filename}`,
+                url: `${SERVER_BASE_URL}${mp3Filename}`,
               }
 
               console.log('✅ Audio converted successfully:', {
@@ -183,7 +184,7 @@ const sendMessageRoute = {
                 mimetype: 'video/mp4',
                 size: stats.size,
                 type: 'video',
-                url: `/uploads/${mp4Filename}`,
+                url: `${SERVER_BASE_URL}${mp4Filename}`,
               }
 
               console.log('✅ Video converted successfully:', {
