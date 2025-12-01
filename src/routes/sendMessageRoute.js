@@ -149,7 +149,7 @@ const sendMessageRoute = {
                 mimetype: 'audio/mpeg',
                 size: stats.size,
                 type: 'audio',
-                url: `${SERVER_BASE_URL}${mp3Filename}`,
+                url: `/uploads/audio/${mp3Filename}`,
               }
 
               console.log('✅ Audio converted successfully:', {
@@ -184,7 +184,7 @@ const sendMessageRoute = {
                 mimetype: 'video/mp4',
                 size: stats.size,
                 type: 'video',
-                url: `${SERVER_BASE_URL}${mp4Filename}`,
+                url: `/uploads/videos/${mp4Filename}`,
               }
 
               console.log('✅ Video converted successfully:', {

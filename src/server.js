@@ -21,7 +21,25 @@ const app = express()
 app.use(cors())
 app.use(express.json())
 
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')))
+const uploadsPath = path.join(__dirname, '..', 'src', 'uploads')
+
+app.use(
+  '/uploads',
+  (req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*')
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin')
+    res.setHeader('Accept-Ranges', 'bytes')
+
+    const ext = path.extname(req.path).toLowerCase()
+    if (ext === '.mp3') res.setHeader('Content-Type', 'audio/mpeg')
+    if (ext === '.mp4') res.setHeader('Content-Type', 'video/mp4')
+
+    next()
+  },
+  express.static(uploadsPath)
+)
+
+console.log('Uploads served from:', uploadsPath)
 
 // Create HTTP server
 const server = http.createServer(app)
