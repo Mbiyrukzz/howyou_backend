@@ -7,7 +7,7 @@ const {
 const { verifyAuthToken } = require('../middleware/verifyAuthToken')
 
 const SERVER_BASE_URL =
-  process.env.SERVER_BASE_URL || 'http://10.102.223.87:5000'
+  process.env.SERVER_BASE_URL || 'http://10.128.61.87:5000'
 
 // ✅ Helper function to broadcast to WebSocket clients
 function broadcastToWebSocket(clients, message, excludeUserId = null) {
