@@ -1,7 +1,7 @@
 // migrateMessages.js
 const { MongoClient, ObjectId } = require('mongodb')
 
-const uri = 'mongodb://10.128.61.87:27017' // change if needed
+const uri = 'mongodb://10.156.197.87:27017' // change if needed
 const dbName = 'your_db_name'
 
 async function migrateMessages() {

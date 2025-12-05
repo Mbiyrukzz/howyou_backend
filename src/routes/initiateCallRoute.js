@@ -491,8 +491,10 @@ const cancelCallRoute = {
 
       const call = await calls.findOne({
         _id: new ObjectId(callId),
-        callerId: req.user.uid,
-        status: 'initiated',
+        $or: [
+          { callerId: req.user.uid, status: 'initiated' },
+          { recipientId: req.user.uid, status: 'initiated' },
+        ],
       })
 
       if (!call) {
@@ -502,57 +504,76 @@ const cancelCallRoute = {
         })
       }
 
+      // Determine the appropriate status
+      let finalStatus
+      const isRecipientCancelling = call.recipientId === req.user.uid
+
+      if (reason === 'timeout') {
+        // Timeout means no one answered
+        finalStatus = 'missed'
+      } else if (isRecipientCancelling) {
+        // Recipient declined the call
+        finalStatus = 'declined'
+      } else {
+        // Caller cancelled before recipient answered
+        finalStatus = 'cancelled'
+      }
+
       const updateData = {
-        status: reason === 'timeout' ? 'missed' : 'cancelled',
+        status: finalStatus,
         endTime: new Date(),
         duration: 0,
       }
 
       await calls.updateOne({ _id: new ObjectId(callId) }, { $set: updateData })
 
-      const caller = await users.findOne({ firebaseUid: req.user.uid })
-      const callerName =
-        caller?.name || req.user.displayName || req.user.email || 'Unknown'
+      const currentUser = await users.findOne({ firebaseUid: req.user.uid })
+      const currentUserName =
+        currentUser?.name || req.user.displayName || req.user.email || 'Unknown'
 
-      // Notify recipient on both endpoints
+      // Determine the other party
+      const otherUserId =
+        call.callerId === req.user.uid ? call.recipientId : call.callerId
+
+      // Notify the other party on both endpoints
       sendToUserOnEndpoint(
-        call.recipientId,
+        otherUserId,
         {
-          type: 'call-ended',
+          type: 'call_ended',
           callId: callId,
-          reason: reason,
-          callerName: callerName,
+          reason: finalStatus,
+          callerName: currentUserName,
           timestamp: new Date().toISOString(),
         },
         'signaling'
       )
 
       sendToUserOnEndpoint(
-        call.recipientId,
+        otherUserId,
         {
-          type: 'call-ended',
+          type: 'call_ended',
           callId: callId,
-          reason: reason,
+          reason: finalStatus,
           timestamp: new Date().toISOString(),
         },
         'notifications'
       )
 
-      // Send missed call notification
-      if (reason === 'timeout') {
+      // Send missed call notification only if the call was missed/declined
+      if (finalStatus === 'missed' || finalStatus === 'declined') {
         await sendMissedCallNotification(
-          call.recipientId,
-          callerName,
+          otherUserId,
+          currentUserName,
           call.callType
         )
       }
 
-      console.log(`✅ Call ${reason}:`, callId)
+      console.log(`✅ Call ${finalStatus}:`, callId)
 
       res.json({
         success: true,
         call: { ...call, ...updateData },
-        message: `Call ${reason}`,
+        message: `Call ${finalStatus}`,
       })
     } catch (err) {
       console.error('❌ Error cancelling call:', err)
@@ -594,16 +615,69 @@ const getCallHistoryRoute = {
         })
       }
 
+      // Get all calls for this chat
       const callHistory = await calls
         .find({ chatId: new ObjectId(chatId) })
         .sort({ createdAt: -1 })
         .toArray()
 
-      console.log(`✅ Call history retrieved: ${callHistory.length} calls`)
+      // Transform calls to include direction from user's perspective
+      const transformedCalls = callHistory.map((call) => {
+        // Determine if this was an incoming or outgoing call for the current user
+        const isIncoming = call.recipientId === req.user.uid
+        const direction = isIncoming ? 'incoming' : 'outgoing'
+
+        // Determine final status from user's perspective
+        let status = call.status
+
+        if (call.status === 'missed') {
+          // Missed call - unanswered by recipient
+          status = 'missed'
+        } else if (call.status === 'cancelled') {
+          // Cancelled by caller before answer
+          status = isIncoming ? 'missed' : 'cancelled'
+        } else if (call.status === 'declined') {
+          // Declined by recipient
+          status = 'rejected'
+        } else if (call.status === 'accepted' || call.status === 'ended') {
+          // Call was connected
+          status = 'completed'
+        }
+
+        return {
+          _id: call._id,
+          chatId: call.chatId,
+          callerId: call.callerId,
+          recipientId: call.recipientId,
+          callType: call.callType,
+          status: status,
+          direction: direction,
+          duration: call.duration || 0,
+          createdAt: call.createdAt,
+          startTime: call.startTime,
+          endTime: call.endTime,
+          // Preserve original status for debugging
+          originalStatus: call.status,
+        }
+      })
+
+      console.log(
+        `✅ Call history retrieved: ${transformedCalls.length} calls (including missed/rejected)`
+      )
+      console.log(
+        `📊 Sample call directions for user ${req.user.uid}:`,
+        transformedCalls.slice(0, 3).map((c) => ({
+          callId: c._id.toString(),
+          callerId: c.callerId,
+          recipientId: c.recipientId,
+          direction: c.direction,
+          status: c.status,
+        }))
+      )
 
       res.json({
         success: true,
-        calls: callHistory,
+        calls: transformedCalls,
       })
     } catch (err) {
       console.error('❌ Error getting call history:', err)

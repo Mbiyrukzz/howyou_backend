@@ -10,7 +10,7 @@ const path = require('path')
 const fs = require('fs')
 
 const SERVER_BASE_URL =
-  process.env.SERVER_BASE_URL || 'http://10.128.61.87:5000'
+  process.env.SERVER_BASE_URL || 'http://10.156.197.87:5000'
 
 // =================== VIDEO HELPER FUNCTIONS ===================
 

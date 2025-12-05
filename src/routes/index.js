@@ -53,9 +53,21 @@ const {
   hasViewedStatusRoute,
 } = require('./statusViewRoutes')
 const { deleteCallLogRoute } = require('./deleteCallLog')
+const {
+  updateUserProfileRoute,
+  getUserProfileRoute,
+  deleteProfilePictureRoute,
+  updatePasswordRoute,
+  updateProfilePictureRoute,
+} = require('./updateUserRoute')
 
 const routes = [
   createUserRoute,
+  updateUserProfileRoute,
+  updateProfilePictureRoute,
+  updatePasswordRoute,
+  deleteProfilePictureRoute,
+  getUserProfileRoute,
 
   createChatRoute,
   deleteChatRoute,

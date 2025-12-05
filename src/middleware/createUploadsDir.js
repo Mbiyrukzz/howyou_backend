@@ -51,7 +51,6 @@ const storage = multer.diskStorage({
   },
 })
 
-
 const fileFilter = (req, file, cb) => {
   // Allowed file types
   const allowedTypes = {
