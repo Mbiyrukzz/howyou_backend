@@ -34,6 +34,7 @@ const getCollections = () => {
     statuses: db.collection('statuses'),
     posts: db.collection('posts'),
     comments: db.collection('comments'),
+    contacts: db.collection('contacts'),
   }
 }
 

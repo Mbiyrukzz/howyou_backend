@@ -59,7 +59,15 @@ const {
   deleteProfilePictureRoute,
   updatePasswordRoute,
   updateProfilePictureRoute,
+  getOtherUserAvatarRoute,
 } = require('./updateUserRoute')
+const {
+  addContactRoute,
+  getContactsRoute,
+  removeContactRoute,
+  searchUsersRoute,
+  toggleFavoriteRoute,
+} = require('./contacts')
 
 const routes = [
   createUserRoute,
@@ -68,6 +76,13 @@ const routes = [
   updatePasswordRoute,
   deleteProfilePictureRoute,
   getUserProfileRoute,
+  getOtherUserAvatarRoute,
+
+  addContactRoute,
+  getContactsRoute,
+  removeContactRoute,
+  searchUsersRoute,
+  toggleFavoriteRoute,
 
   createChatRoute,
   deleteChatRoute,

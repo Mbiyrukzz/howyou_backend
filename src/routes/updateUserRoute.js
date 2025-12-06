@@ -5,8 +5,7 @@ const { verifyAuthToken } = require('../middleware/verifyAuthToken')
 const admin = require('firebase-admin')
 
 // ✅ Add SERVER_BASE_URL constant (same as sendMessageRoute)
-const SERVER_BASE_URL =
-  process.env.SERVER_BASE_URL || 'http://10.156.197.87:5000'
+const SERVER_BASE_URL = 'http://10.159.160.87:5000'
 
 // ==============================
 // GET USER PROFILE
@@ -162,11 +161,6 @@ const updateProfilePictureRoute = {
     try {
       const { users } = getCollections()
       const { userId } = req.params
-
-      console.log('📥 Update profile picture request')
-      console.log('📥 URL params userId:', userId)
-      console.log('📥 req.user.uid:', req.user?.uid)
-      console.log('📥 req.file:', req.file ? 'File received' : 'No file')
 
       // Security check
       if (req.user.uid !== userId) {
@@ -508,10 +502,47 @@ const deleteProfilePictureRoute = {
   },
 }
 
+// ==============================
+// GET ANY USER'S AVATAR (PUBLIC ROUTE)
+// ==============================
+const getOtherUserAvatarRoute = {
+  method: 'get',
+  path: '/users/:userId/avatar',
+  middleware: [], // No auth required → public
+  handler: async (req, res) => {
+    try {
+      const { users } = getCollections()
+      const { userId } = req.params
+
+      const user = await users.findOne(
+        { firebaseUid: userId },
+        { projection: { profilePicture: 1 } } // only fetch what we need
+      )
+
+      let profilePicture = null
+      if (user?.profilePicture) {
+        profilePicture = `${SERVER_BASE_URL}${user.profilePicture}`
+      }
+
+      // Optional: fallback to a default avatar
+      // if (!profilePicture) profilePicture = `${SERVER_BASE_URL}/default-avatar.png`
+
+      res.json({
+        success: true,
+        profilePicture, // null or full URL
+      })
+    } catch (err) {
+      console.error('Failed to fetch avatar:', err)
+      res.status(500).json({ success: false, error: 'Server error' })
+    }
+  },
+}
+
 module.exports = {
   getUserProfileRoute,
   updateUserProfileRoute,
   updateProfilePictureRoute,
   updatePasswordRoute,
   deleteProfilePictureRoute,
+  getOtherUserAvatarRoute,
 }

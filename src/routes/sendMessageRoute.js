@@ -9,8 +9,7 @@ const ffmpeg = require('fluent-ffmpeg')
 const path = require('path')
 const fs = require('fs')
 
-const SERVER_BASE_URL =
-  process.env.SERVER_BASE_URL || 'http://10.156.197.87:5000'
+const SERVER_BASE_URL = 'http://10.159.160.87:5000'
 
 // =================== VIDEO HELPER FUNCTIONS ===================
 
