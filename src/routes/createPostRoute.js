@@ -6,7 +6,7 @@ const {
 } = require('../middleware/createUploadsDir')
 const { verifyAuthToken } = require('../middleware/verifyAuthToken')
 
-const SERVER_BASE_URL = 'http://10.159.160.87:5000'
+const SERVER_BASE_URL = 'http://10.105.232.87:5000'
 
 // ✅ Helper function to broadcast to WebSocket clients
 function broadcastToWebSocket(clients, message, excludeUserId = null) {

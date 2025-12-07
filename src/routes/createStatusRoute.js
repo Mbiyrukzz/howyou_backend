@@ -7,7 +7,7 @@ const {
 const { verifyAuthToken } = require('../middleware/verifyAuthToken')
 
 const SERVER_BASE_URL =
-  process.env.SERVER_BASE_URL || 'http://10.159.160.87:5000'
+  process.env.SERVER_BASE_URL || 'http://10.105.232.87:5000'
 const MAX_STATUSES_PER_DAY = 5
 
 // ✅ Helper function to broadcast to WebSocket clients
