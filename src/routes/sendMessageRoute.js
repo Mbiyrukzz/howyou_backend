@@ -9,7 +9,7 @@ const ffmpeg = require('fluent-ffmpeg')
 const path = require('path')
 const fs = require('fs')
 
-const SERVER_BASE_URL = 'http://10.105.232.87:5000'
+const SERVER_BASE_URL = 'http://10.60.144.87:5000'
 
 // =================== VIDEO HELPER FUNCTIONS ===================
 
@@ -20,7 +20,7 @@ const generateVideoThumbnail = (videoPath, outputPath) => {
   return new Promise((resolve, reject) => {
     ffmpeg(videoPath)
       .screenshots({
-        timestamps: ['00:00:03'], // Capture at 1 second
+        timestamps: ['00:00:03'], // Capture at 3 seconds
         filename: path.basename(outputPath),
         folder: path.dirname(outputPath),
         size: '640x360', // 16:9 aspect ratio
@@ -142,8 +142,10 @@ const sendMessageRoute = {
     console.log('Files received:', req.files?.length || 0)
 
     try {
-      const { chatId, content, messageType } = req.body
+      const { chatId, content, messageType, replyTo } = req.body
       const files = req.files || []
+
+      console.log('🔄 Reply Data Received:', replyTo)
 
       // Validation
       if (!chatId) {
@@ -163,7 +165,7 @@ const sendMessageRoute = {
         })
       }
 
-      const { messages, chats } = getCollections()
+      const { messages, chats, users } = getCollections()
 
       // Verify user has access to this chat
       const chat = await chats.findOne({
@@ -176,6 +178,54 @@ const sendMessageRoute = {
           success: false,
           error: 'Access denied to this chat',
         })
+      }
+
+      // ✅ Process reply information if provided
+      let replyToData = null
+      if (replyTo) {
+        try {
+          const parsedReply =
+            typeof replyTo === 'string' ? JSON.parse(replyTo) : replyTo
+
+          // Verify the replied message exists and user has access
+          const repliedMessage = await messages.findOne({
+            _id: new ObjectId(parsedReply.messageId),
+            chatId: new ObjectId(chatId),
+          })
+
+          if (repliedMessage) {
+            // Get sender name for the replied message
+            let senderName = parsedReply.senderName || 'User'
+
+            // If sender is current user
+            if (repliedMessage.senderId === req.user.uid) {
+              senderName = 'You'
+            } else {
+              // Try to get the actual sender's name
+              const sender = await users.findOne({
+                firebaseUid: repliedMessage.senderId,
+              })
+              if (sender) {
+                senderName = sender.name || sender.username || 'User'
+              }
+            }
+
+            replyToData = {
+              messageId: repliedMessage._id.toString(),
+              content: parsedReply.content || repliedMessage.content || '',
+              type: parsedReply.type || repliedMessage.type || 'text',
+              senderName: senderName,
+              senderId: repliedMessage.senderId,
+            }
+
+            console.log('✅ Reply data processed:', replyToData)
+          } else {
+            console.warn('⚠️ Replied message not found or not accessible')
+          }
+        } catch (replyError) {
+          console.error('❌ Error processing reply:', replyError)
+          // Continue without reply if processing fails
+        }
       }
 
       // Process uploaded files
@@ -373,6 +423,12 @@ const sendMessageRoute = {
         updatedAt: new Date(),
       }
 
+      // ✅ Add reply information to message if present
+      if (replyToData) {
+        newMessage.replyTo = replyToData
+        console.log('📬 Message includes reply to:', replyToData.messageId)
+      }
+
       if (fileInfoArray.length > 0) {
         newMessage.files = fileInfoArray
       }
@@ -381,6 +437,7 @@ const sendMessageRoute = {
         type: newMessage.type,
         hasContent: !!newMessage.content,
         filesCount: newMessage.files?.length || 0,
+        hasReply: !!newMessage.replyTo,
       })
 
       const result = await messages.insertOne(newMessage)

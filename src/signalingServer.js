@@ -270,7 +270,10 @@ function setupSignalingServer(server) {
         )
         break
 
+      // Inside handleSignalMessage switch (add these cases)
+
       case 'screen-sharing':
+        // Just forward the start/stop flag
         forwardToUser(
           data.to,
           {
@@ -281,6 +284,23 @@ function setupSignalingServer(server) {
           },
           '/signaling'
         )
+        break
+
+      case 'screen-frame':
+        // Forward the base64 JPEG frame to the other participant
+        if (data.to && data.frame && data.timestamp) {
+          forwardToUser(
+            data.to,
+            {
+              type: 'screen-frame',
+              frame: data.frame, // base64 string
+              timestamp: data.timestamp,
+              from: senderId,
+              chatId: data.chatId,
+            },
+            '/signaling'
+          )
+        }
         break
 
       case 'call-answered':

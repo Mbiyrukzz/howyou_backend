@@ -277,13 +277,18 @@ const answerCallRoute = {
       if (accepted) {
         updateData.actualStartTime = new Date()
 
-        // ✅ Send to SIGNALING endpoint
-        const acceptNotificationSent = sendToUserOnEndpoint(
+        // ✅ CRITICAL: Send call_accepted to SIGNALING endpoint for the CALLER
+        console.log(
+          '📤 Sending call_accepted to caller on /signaling:',
+          call.callerId
+        )
+
+        const signalingNotificationSent = sendToUserOnEndpoint(
           call.callerId,
           {
-            type: 'call_accepted',
+            type: 'call_accepted', // Match what frontend expects
             callId: callId,
-            from: req.user.uid, // ✅ Add from field
+            from: req.user.uid, // Who accepted (recipient)
             recipientId: req.user.uid,
             recipientName: recipientName,
             chatId: call.chatId.toString(),
@@ -293,10 +298,11 @@ const answerCallRoute = {
         )
 
         console.log(
-          `✅ Call accepted notification sent to /signaling: ${acceptNotificationSent}`
+          '✅ Signaling notification sent:',
+          signalingNotificationSent
         )
 
-        // Also send to notifications for UI updates
+        // Also send to notifications endpoint for UI updates
         sendToUserOnEndpoint(
           call.callerId,
           {
