@@ -5,7 +5,7 @@ const { verifyAuthToken } = require('../middleware/verifyAuthToken')
 const admin = require('firebase-admin')
 
 // ✅ Add SERVER_BASE_URL constant (same as sendMessageRoute)
-const SERVER_BASE_URL = 'http://10.60.144.87:5000'
+const SERVER_BASE_URL = process.env.SERVER_BASE_URL
 
 // ==============================
 // GET USER PROFILE
