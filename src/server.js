@@ -109,6 +109,48 @@ const startServer = async () => {
       res.send({ message: 'Backend is reachable 🚀' })
     })
 
+    // Test endpoint
+    app.get('/test-livekit', (req, res) => {
+      try {
+        const {
+          generateCallTokens,
+          validateConnection,
+          LIVEKIT_URL,
+        } = require('./services/livekitService')
+
+        const isValid = validateConnection()
+
+        if (!isValid) {
+          return res.json({ success: false, error: 'Not configured' })
+        }
+
+        const tokens = generateCallTokens(
+          'test-123',
+          { uid: 'user1', name: 'Test User 1' },
+          { uid: 'user2', name: 'Test User 2' }
+        )
+
+        res.json({
+          success: true,
+          url: LIVEKIT_URL,
+          types: {
+            caller: typeof tokens.callerToken,
+            recipient: typeof tokens.recipientToken,
+          },
+          preview: {
+            caller: tokens.callerToken.substring(0, 50),
+            recipient: tokens.recipientToken.substring(0, 50),
+          },
+        })
+      } catch (err) {
+        res.json({
+          success: false,
+          error: err.message,
+          stack: err.stack,
+        })
+      }
+    })
+
     app.get('/debug-uploads', (req, res) => {
       const fs = require('fs')
       const uploadsPath = path.join(__dirname, 'uploads')
