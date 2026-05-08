@@ -38,7 +38,7 @@ app.use(
 
     next()
   },
-  express.static(uploadsPath)
+  express.static(uploadsPath),
 )
 
 console.log('Uploads served from:', uploadsPath)
@@ -75,7 +75,6 @@ if (wsClients) {
 // Middleware to ensure wsClients available in all routes
 // ========================================
 app.use((req, res, next) => {
-  // Double-check wsClients is available
   if (!req.app.wsClients) {
     console.warn('⚠️ wsClients not found on req.app, attaching...')
     req.app.wsClients = wsClients
@@ -96,7 +95,7 @@ const startServer = async () => {
         console.log(
           `✅ Registered ${route.method.toUpperCase()} ${
             route.path
-          } with middleware`
+          } with middleware`,
         )
       } else {
         app[route.method](route.path, route.handler)
@@ -127,7 +126,7 @@ const startServer = async () => {
         const tokens = generateCallTokens(
           'test-123',
           { uid: 'user1', name: 'Test User 1' },
-          { uid: 'user2', name: 'Test User 2' }
+          { uid: 'user2', name: 'Test User 2' },
         )
 
         res.json({
@@ -163,9 +162,9 @@ const startServer = async () => {
           uploadsPath,
           imagesPath,
           filesCount: files.length,
-          files: files.slice(0, 10), // Show first 10 files
+          files: files.slice(0, 10),
           sampleUrl: files[0]
-            ? `http://10.68.138.87:5000/uploads/images/${files[0]}`
+            ? `${process.env.SERVER_BASE_URL}/uploads/images/${files[0]}`
             : 'No files',
         })
       } catch (err) {
@@ -205,7 +204,7 @@ const startServer = async () => {
           pathname: client.pathname,
           connectedAt: client.connectedAt,
           lastActivity: client.lastActivity,
-          readyState: client.ws.readyState, // 0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED
+          readyState: client.ws.readyState,
         })),
       })
     })
@@ -228,14 +227,13 @@ const startServer = async () => {
 
       wsClients.forEach((client, userId) => {
         if (client.ws.readyState === 1) {
-          // OPEN
           try {
             client.ws.send(
               JSON.stringify({
                 type: type || 'test-message',
                 message: message || 'Test broadcast',
                 timestamp: new Date().toISOString(),
-              })
+              }),
             )
             broadcastCount++
             console.log(`✅ Test broadcast sent to: ${userId}`)
@@ -255,9 +253,10 @@ const startServer = async () => {
     })
 
     // Start server
-    server.listen(5000, '0.0.0.0', () => {
+    const PORT = process.env.PORT || 5000
+    server.listen(PORT, '0.0.0.0', () => {
       console.log('\n╔════════════════════════════════════════╗')
-      console.log('║  Server running on http://0.0.0.0:5000 ║')
+      console.log(`║  Server running on http://0.0.0.0:${PORT} ║`)
       console.log('║  WebSocket signaling ready             ║')
       console.log('╚════════════════════════════════════════╝\n')
 
