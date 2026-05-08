@@ -109,7 +109,7 @@ const startServer = async () => {
     })
 
     // Test endpoint
-    app.get('/test-livekit', (req, res) => {
+    app.get('/test-livekit', async (req, res) => {
       try {
         const {
           generateCallTokens,
@@ -123,7 +123,7 @@ const startServer = async () => {
           return res.json({ success: false, error: 'Not configured' })
         }
 
-        const tokens = generateCallTokens(
+        const tokens = await generateCallTokens(
           'test-123',
           { uid: 'user1', name: 'Test User 1' },
           { uid: 'user2', name: 'Test User 2' },
